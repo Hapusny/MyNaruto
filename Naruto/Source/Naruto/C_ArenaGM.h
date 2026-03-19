@@ -6,6 +6,8 @@
 #include "GameFramework/GameMode.h"
 #include "C_ArenaGM.generated.h"
 
+class AC_Character;
+
 /**
  * 
  */
@@ -18,6 +20,13 @@ class NARUTO_API AC_ArenaGM : public AGameMode
 public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
+	UPROPERTY(EditAnywhere)
+	TSubclassOf<AC_Character>Player1Pawn;
+
+	UPROPERTY(EditAnywhere)
+	TSubclassOf<AC_Character>Player2Pawn;
+
+
 protected:
 	virtual void BeginPlay()override;
 
@@ -25,8 +34,7 @@ private:
 	UPROPERTY()
 	TArray<APlayerController*> Players;
 
-	UFUNCTION()
 	void AssignTeams();
 
-
+	void SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player);
 };

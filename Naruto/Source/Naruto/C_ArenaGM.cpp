@@ -3,6 +3,8 @@
 
 #include "C_ArenaGM.h"
 #include "C_PlayerState.h"
+#include "C_Character.h"
+
 
 void AC_ArenaGM::PostLogin(APlayerController* NewPlayer)
 {
@@ -40,10 +42,36 @@ void AC_ArenaGM::AssignTeams()
     {
         PS1->SetTeam(Player1Team);  
         UE_LOG(LogTemp, Log, TEXT("Player1:%s"), *(UEnum::GetValueAsString(Player1Team)));
+        SpawnPawnToPlayer(Player1Pawn, Players[0]);
     }
     if (PS2)
     {
         PS2->SetTeam(Player2Team);
         UE_LOG(LogTemp, Log, TEXT("Player2:%s"), *(UEnum::GetValueAsString(Player2Team)));
+        SpawnPawnToPlayer(Player2Pawn, Players[1]);
+    }
+}
+
+void AC_ArenaGM::SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player)
+{
+    AC_PlayerState* PS = Player->GetPlayerState<AC_PlayerState>();
+    AActor* PlayerStart;
+    if (PS->Team == ETeamType::Blue)PlayerStart = FindPlayerStart(Player, "Blue");
+    else PlayerStart = FindPlayerStart(Player, "Red");
+    UWorld* World = GetWorld();
+    if (Player->GetPawn())
+    {
+        Player->GetPawn()->Destroy();
+    }
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.Owner = Player;
+    SpawnParams.Instigator = nullptr;
+    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+    APawn* NewPawn = World->SpawnActor<APawn>(PawnClass, PlayerStart->GetTransform(), SpawnParams);
+
+    if (NewPawn) {
+        Player->Possess(NewPawn);
+        UE_LOG(LogTemp, Log, TEXT("Successfully spawned and possessed pawn for player: %s"), *Player->GetName());
     }
 }
