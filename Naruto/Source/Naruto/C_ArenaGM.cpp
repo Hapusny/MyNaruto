@@ -71,6 +71,7 @@ void AC_ArenaGM::SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerC
     APawn* NewPawn = World->SpawnActor<APawn>(PawnClass, PlayerStart->GetTransform(), SpawnParams);
 
     if (NewPawn) {
+        NewPawn->SetOwner(Player);
         Player->Possess(NewPawn);
         UE_LOG(LogTemp, Log, TEXT("Successfully spawned and possessed pawn for player: %s"), *Player->GetName());
     }

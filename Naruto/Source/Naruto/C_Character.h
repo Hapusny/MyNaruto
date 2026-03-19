@@ -6,6 +6,10 @@
 #include "GameFramework/Character.h"
 #include "C_Character.generated.h"
 
+class UInputMappingContext;
+class UInputAction;
+struct FInputActionValue;
+
 UCLASS()
 class NARUTO_API AC_Character : public ACharacter
 {
@@ -15,9 +19,19 @@ public:
 	// Sets default values for this character's properties
 	AC_Character();
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputMappingContext* DefaultMappingContext;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* MoveAction;
+
+	virtual void PossessedBy(AController* NewController)override;
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
+
+	void Move(const FInputActionValue& Value);
 
 public:	
 	// Called every frame
