@@ -4,6 +4,7 @@
 #include "C_ArenaGM.h"
 #include "C_PlayerState.h"
 #include "C_Character.h"
+#include "C_Camera.h"
 
 
 void AC_ArenaGM::PostLogin(APlayerController* NewPlayer)
@@ -43,12 +44,28 @@ void AC_ArenaGM::AssignTeams()
         PS1->SetTeam(Player1Team);  
         UE_LOG(LogTemp, Log, TEXT("Player1:%s"), *(UEnum::GetValueAsString(Player1Team)));
         SpawnPawnToPlayer(Player1Pawn, Players[0]);
+        AC_Camera* NewCamera = GetWorld()->SpawnActor<AC_Camera>(PlayerCameraClass);
+        NewCamera->SetOwner(Players[0]);
+        APlayerController* Player = Players[0];
+        FTimerHandle TimerHandle;
+        GetWorldTimerManager().SetTimer(TimerHandle, [this, NewCamera, Player]()
+            {
+                NewCamera->Client_Activate(Player);
+            }, 0.1f, false);
     }
     if (PS2)
     {
         PS2->SetTeam(Player2Team);
         UE_LOG(LogTemp, Log, TEXT("Player2:%s"), *(UEnum::GetValueAsString(Player2Team)));
         SpawnPawnToPlayer(Player2Pawn, Players[1]);
+        AC_Camera* NewCamera = GetWorld()->SpawnActor<AC_Camera>(PlayerCameraClass);
+        NewCamera->SetOwner(Players[1]);
+        APlayerController* Player = Players[1];
+        FTimerHandle TimerHandle;
+        GetWorldTimerManager().SetTimer(TimerHandle, [this, NewCamera, Player]()
+            {
+                NewCamera->Client_Activate(Player);
+            }, 0.1f, false);
     }
 }
 

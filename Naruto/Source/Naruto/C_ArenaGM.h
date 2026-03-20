@@ -7,7 +7,7 @@
 #include "C_ArenaGM.generated.h"
 
 class AC_Character;
-
+class AC_Camera;
 /**
  * 
  */
@@ -25,6 +25,9 @@ public:
 
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<AC_Character>Player2Pawn;
+
+	UPROPERTY(EditAnywhere)
+	TSubclassOf<AC_Camera>PlayerCameraClass;
 
 
 protected:

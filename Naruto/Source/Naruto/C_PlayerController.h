@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "C_PlayerController.generated.h"
 
+class UInputMappingContext;
 /**
  * 
  */
@@ -14,4 +15,9 @@ class NARUTO_API AC_PlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	
+public:
+	virtual void BeginPlay()override;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputMappingContext* DefaultMappingContext;
 };

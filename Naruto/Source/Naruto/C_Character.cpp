@@ -20,30 +20,12 @@ AC_Character::AC_Character()
 void AC_Character::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
-	if (APlayerController* PlayerController = Cast<APlayerController>(NewController))
-	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
-		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
-		}
-		FInputModeGameOnly InputMode;
-		PlayerController->SetInputMode(InputMode);
-	}
 }
 
 // Called when the game starts or when spawned
 void AC_Character::BeginPlay()
 {
 	Super::BeginPlay();
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
-		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
-		}
-		FInputModeGameOnly InputMode;
-		PlayerController->SetInputMode(InputMode);
-	}
 }
 
 void AC_Character::Move(const FInputActionValue& Value)
