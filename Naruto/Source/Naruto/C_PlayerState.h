@@ -24,6 +24,8 @@ class NARUTO_API AC_PlayerState : public APlayerState
 	
 public:
 
+    AC_PlayerState();
+
     UPROPERTY(Replicated)
     ETeamType Team;
 

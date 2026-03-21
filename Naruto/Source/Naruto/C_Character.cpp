@@ -5,6 +5,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "Net/UnrealNetwork.h"
 
 // Sets default values
 AC_Character::AC_Character()
@@ -20,6 +21,13 @@ AC_Character::AC_Character()
 void AC_Character::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	UE_LOG(LogTemp, Warning, TEXT("Toward: %s"), Toward ? TEXT("true") : TEXT("false"));
+}
+
+void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AC_Character, Toward);
 }
 
 // Called when the game starts or when spawned

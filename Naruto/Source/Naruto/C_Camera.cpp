@@ -3,6 +3,7 @@
 
 #include "C_Camera.h"
 #include "Camera/CameraComponent.h"
+#include "C_Character.h"
 
 // Sets default values
 AC_Camera::AC_Camera()
@@ -61,7 +62,20 @@ void AC_Camera::Tick(float DeltaTime)
 void AC_Camera::UpdateTracking()
 {
     if (!TargetActor)return;
-    FVector TargetLocation = TargetActor->GetActorLocation() + Offset;
+
+    AC_Character* Character = Cast<AC_Character>(TargetActor);
+    FVector TargetOffset = Offset;
+    if (Character)
+    {
+        if (Character->Toward)TargetOffset.X = Offset.X;
+        else TargetOffset.X = - Offset.X;
+    }
+    FVector TargetLocation = TargetActor->GetActorLocation() + TargetOffset;
+
+    if (TargetLocation.X > Max.X)TargetLocation.X = Max.X;
+    if (TargetLocation.Y > Max.Y)TargetLocation.Y = Max.Y;
+    if (TargetLocation.X < Min.X)TargetLocation.X = Min.X;
+    if (TargetLocation.Y < Min.Y)TargetLocation.Y = Min.Y;
 
     FVector NewLocation = FMath::VInterpTo(
         GetActorLocation(),
@@ -70,7 +84,5 @@ void AC_Camera::UpdateTracking()
         FollowSpeed
     );
     SetActorLocation(NewLocation);
-    UE_LOG(LogTemp, Warning, TEXT("Current: X=%.1f, Y=%.1f, Z=%.1f"),
-        NewLocation.X, NewLocation.Y, NewLocation.Z);
 }
 

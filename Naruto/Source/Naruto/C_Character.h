@@ -19,10 +19,15 @@ public:
 	// Sets default values for this character's properties
 	AC_Character();
 
+	UPROPERTY(Replicated)
+	bool Toward = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* MoveAction;
 
 	virtual void PossessedBy(AController* NewController)override;
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
 	// Called when the game starts or when spawned

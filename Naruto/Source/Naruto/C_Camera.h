@@ -29,13 +29,19 @@ public:
 	void StartTrack(AActor* Target);
 
 	UPROPERTY(EditAnywhere)
-	float UpdateInterval = 0.033f;
+	float UpdateInterval = 0.017f;
 
 	UPROPERTY(EditAnywhere)
 	FVector Offset = FVector(0, 0, 200);
 
-	 UPROPERTY(EditAnywhere)
+	UPROPERTY(EditAnywhere)
     float FollowSpeed = 10.0f;
+
+	UPROPERTY(EditAnywhere)
+	FVector2D Max = FVector2D(100,100);
+
+	UPROPERTY(EditAnywhere)
+	FVector2D Min = FVector2D(-100, -100);
 
 protected:
 	// Called when the game starts or when spawned

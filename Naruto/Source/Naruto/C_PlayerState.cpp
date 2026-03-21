@@ -4,6 +4,11 @@
 #include "C_PlayerState.h"
 #include "Net/UnrealNetwork.h"
 
+AC_PlayerState::AC_PlayerState()
+{
+	NetUpdateFrequency = 60.f;
+}
+
 void AC_PlayerState::SetTeam(ETeamType TargetTeam)
 {
 	Team = TargetTeam;
