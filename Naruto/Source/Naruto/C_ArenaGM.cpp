@@ -86,8 +86,7 @@ void AC_ArenaGM::SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerC
     AC_Character* NewPawn = World->SpawnActor<AC_Character>(PawnClass, PlayerStart->GetTransform(), SpawnParams);
 
     if (NewPawn) {
-        if (PS->Team == ETeamType::Blue)NewPawn->Toward = true;
-        else NewPawn->Toward = false;
+        if (PS->Team == ETeamType::Red)NewPawn->Server_ChangeToward_Implementation();
         NewPawn->SetOwner(Player);
         Player->Possess(NewPawn);
     }

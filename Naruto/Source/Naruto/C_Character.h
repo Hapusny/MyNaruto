@@ -8,6 +8,7 @@
 
 class UInputMappingContext;
 class UInputAction;
+class UPaperFlipbookComponent;
 struct FInputActionValue;
 
 UCLASS()
@@ -29,11 +30,17 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<UPaperFlipbookComponent> Flipbook;
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
 
 	void Move(const FInputActionValue& Value);
+
+	UFUNCTION(Server,Reliable)
+	void Server_ChangeToward();
 
 public:	
 	// Called every frame

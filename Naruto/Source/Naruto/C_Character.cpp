@@ -6,14 +6,20 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Net/UnrealNetwork.h"
+#include "PaperFlipbookComponent.h"
 
 // Sets default values
 AC_Character::AC_Character()
 {
  	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-
-	// Õ¯¬Á…Ë÷√
+	Flipbook = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("FlipbookComponent"));
+	if (Flipbook)
+	{
+		Flipbook->SetupAttachment(RootComponent);
+		Flipbook->SetRelativeRotation(FRotator(0.f, 0.0f, -90.0f));
+		Flipbook->SetIsReplicated(true);
+	}
 	bReplicates = true;
 	SetReplicateMovement(true);
 }
@@ -21,7 +27,6 @@ AC_Character::AC_Character()
 void AC_Character::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
-	UE_LOG(LogTemp, Warning, TEXT("Toward: %s"), Toward ? TEXT("true") : TEXT("false"));
 }
 
 void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -52,10 +57,19 @@ void AC_Character::Move(const FInputActionValue& Value)
 		// get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
+		if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
 		// add movement 
 		AddMovementInput(ForwardDirection, MovementVector.Y);
 		AddMovementInput(RightDirection, MovementVector.X);
 	}
+}
+
+void AC_Character::Server_ChangeToward_Implementation()
+{
+	Toward = !Toward;
+	if(Flipbook->GetRelativeRotation().Yaw > 90) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
+	else Flipbook->SetRelativeRotation(FRotator(180.f, 0.f, -90.f));
+	
 }
 
 // Called every frame
