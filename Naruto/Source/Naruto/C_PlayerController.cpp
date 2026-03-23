@@ -4,6 +4,7 @@
 #include "C_PlayerController.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "C_PlayerWidget.h"
 
 void AC_PlayerController::BeginPlay()
 {
@@ -14,5 +15,11 @@ void AC_PlayerController::BeginPlay()
 	}
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
+}
+
+void AC_PlayerController::Client_ShowWidget_Implementation()
+{
+	if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);
+	PlayerWidget->AddToViewport();
 }
 

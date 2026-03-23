@@ -2,6 +2,7 @@
 
 
 #include "C_ArenaGM.h"
+#include "C_PlayerController.h"
 #include "C_PlayerState.h"
 #include "C_Character.h"
 #include "C_Camera.h"
@@ -45,11 +46,12 @@ void AC_ArenaGM::AssignTeams()
         SpawnPawnToPlayer(Player1Pawn, Players[0]);
         AC_Camera* NewCamera = GetWorld()->SpawnActor<AC_Camera>(PlayerCameraClass);
         NewCamera->SetOwner(Players[0]);
-        APlayerController* Player = Players[0];
+        AC_PlayerController* Player = Cast<AC_PlayerController>(Players[0]);
         FTimerHandle TimerHandle;
         GetWorldTimerManager().SetTimer(TimerHandle, [this, NewCamera, Player]()
             {
                 NewCamera->Client_Activate(Player);
+                Player->Client_ShowWidget();
             }, 0.1f, false);
     }
     if (PS2)
@@ -58,11 +60,12 @@ void AC_ArenaGM::AssignTeams()
         SpawnPawnToPlayer(Player2Pawn, Players[1]);
         AC_Camera* NewCamera = GetWorld()->SpawnActor<AC_Camera>(PlayerCameraClass);
         NewCamera->SetOwner(Players[1]);
-        APlayerController* Player = Players[1];
+        AC_PlayerController* Player = Cast<AC_PlayerController>(Players[1]);
         FTimerHandle TimerHandle;
         GetWorldTimerManager().SetTimer(TimerHandle, [this, NewCamera, Player]()
             {
                 NewCamera->Client_Activate(Player);
+                Player->Client_ShowWidget();
             }, 0.1f, false);
     }
 }

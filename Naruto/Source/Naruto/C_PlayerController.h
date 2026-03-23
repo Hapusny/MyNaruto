@@ -7,6 +7,7 @@
 #include "C_PlayerController.generated.h"
 
 class UInputMappingContext;
+class UC_PlayerWidget;
 /**
  * 
  */
@@ -20,4 +21,13 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputMappingContext* DefaultMappingContext;
+
+	UPROPERTY(EditAnywhere)
+	TSubclassOf<UC_PlayerWidget>PlayerWidgetClass;
+
+	UFUNCTION(Client,Reliable)
+	void Client_ShowWidget();
+
+private:
+	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 };
