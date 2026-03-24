@@ -28,6 +28,9 @@ public:
 	UFUNCTION(Client,Reliable)
 	void Client_ShowWidget();
 
+	UFUNCTION(Client, Reliable)
+	void Client_SetWidgetTime(int time);
+
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 };

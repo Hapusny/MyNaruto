@@ -17,6 +17,11 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
+void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)
+{
+	if (PlayerWidget)PlayerWidget->SetTime(time);
+}
+
 void AC_PlayerController::Client_ShowWidget_Implementation()
 {
 	if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);

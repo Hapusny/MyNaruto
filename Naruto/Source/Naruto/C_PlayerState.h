@@ -29,6 +29,9 @@ public:
     UPROPERTY(Replicated)
     ETeamType Team;
 
+    UPROPERTY(Replicated)
+    int ClockTime;
+
     UFUNCTION()
     void SetTeam(ETeamType TargetTeam);
 

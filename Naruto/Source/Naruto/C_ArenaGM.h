@@ -8,6 +8,8 @@
 
 class AC_Character;
 class AC_Camera;
+class AC_PlayerController;
+class AC_PlayerState;
 /**
  * 
  */
@@ -37,7 +39,21 @@ private:
 	UPROPERTY()
 	TArray<APlayerController*> Players;
 
+	TObjectPtr<AC_PlayerController>Player1;
+
+	TObjectPtr<AC_PlayerController>Player2;
+
+	TObjectPtr<AC_PlayerState>PS1;
+
+	TObjectPtr<AC_PlayerState>PS2;
+
 	void AssignTeams();
 
 	void SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player);
+
+	void StartFight();
+
+	FTimerHandle ClockHandle;
+
+	void ClockChange();
 };
