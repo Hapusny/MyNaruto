@@ -52,7 +52,7 @@ void AC_ArenaGM::AssignTeams()
         GetWorldTimerManager().SetTimer(TimerHandle, [this, NewCamera, Player]()
             {
                 NewCamera->Client_Activate(Player);
-            }, 0.1f, false);
+            }, 0.2f, false);
     }
     if (PS2)
     {
@@ -67,7 +67,7 @@ void AC_ArenaGM::AssignTeams()
             {
                 NewCamera->Client_Activate(Player);
                 StartFight();
-            }, 0.1f, false);
+            }, 0.2f, false);
     }
 }
 

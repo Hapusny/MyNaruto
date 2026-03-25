@@ -9,6 +9,8 @@
 class UInputMappingContext;
 class UInputAction;
 class UPaperFlipbookComponent;
+class UPaperZDAnimationComponent;
+
 struct FInputActionValue;
 
 UCLASS()
@@ -32,6 +34,9 @@ public:
 
 	UPROPERTY(EditAnywhere)
 	TObjectPtr<UPaperFlipbookComponent> Flipbook;
+
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
 
 protected:
 	// Called when the game starts or when spawned

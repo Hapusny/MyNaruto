@@ -7,6 +7,7 @@
 #include "InputActionValue.h"
 #include "Net/UnrealNetwork.h"
 #include "PaperFlipbookComponent.h"
+#include "PaperZDAnimationComponent.h"
 
 // Sets default values
 AC_Character::AC_Character()
@@ -14,11 +15,15 @@ AC_Character::AC_Character()
  	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 	Flipbook = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("FlipbookComponent"));
+	PaperZD = CreateDefaultSubobject<UPaperZDAnimationComponent>(TEXT("PaperZDComponent"));
 	if (Flipbook)
 	{
 		Flipbook->SetupAttachment(RootComponent);
 		Flipbook->SetRelativeRotation(FRotator(0.f, 0.0f, -90.0f));
 		Flipbook->SetIsReplicated(true);
+		if (PaperZD) {
+			PaperZD->InitRenderComponent(Flipbook);
+		}
 	}
 	bReplicates = true;
 	SetReplicateMovement(true);
