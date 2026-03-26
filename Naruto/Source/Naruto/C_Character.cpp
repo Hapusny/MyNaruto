@@ -8,6 +8,7 @@
 #include "Net/UnrealNetwork.h"
 #include "PaperFlipbookComponent.h"
 #include "PaperZDAnimationComponent.h"
+#include "PaperZDAnimInstance.h"
 
 // Sets default values
 AC_Character::AC_Character()

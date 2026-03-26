@@ -35,8 +35,9 @@ public:
 	UPROPERTY(EditAnywhere)
 	TObjectPtr<UPaperFlipbookComponent> Flipbook;
 
-	UPROPERTY(EditAnywhere)
+	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
+
 
 protected:
 	// Called when the game starts or when spawned
