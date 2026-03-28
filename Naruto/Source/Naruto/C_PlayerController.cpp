@@ -5,6 +5,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "C_PlayerWidget.h"
+#include "C_PlayerState.h"
 
 void AC_PlayerController::BeginPlay()
 {
@@ -16,6 +17,15 @@ void AC_PlayerController::BeginPlay()
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
 }
+
+void AC_PlayerController::Server_ChangeCharacterState_Implementation(ECharacterStateType TargetCharacterState)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		PS->CharacterState = TargetCharacterState;
+	}
+}
+
 
 void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)
 {

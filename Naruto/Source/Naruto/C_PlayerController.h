@@ -31,6 +31,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_SetWidgetTime(int time);
 
+	UFUNCTION(Server,Reliable)
+	void Server_ChangeCharacterState(ECharacterStateType TargetCharacterState);
+
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 };

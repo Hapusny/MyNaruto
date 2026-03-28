@@ -9,6 +9,8 @@
 #include "PaperFlipbookComponent.h"
 #include "PaperZDAnimationComponent.h"
 #include "PaperZDAnimInstance.h"
+#include "C_PlayerController.h"
+#include "C_PlayerState.h"
 
 // Sets default values
 AC_Character::AC_Character()
@@ -33,6 +35,9 @@ AC_Character::AC_Character()
 void AC_Character::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	if (IsLocallyControlled()) {
+		Cast<AC_PlayerController>(NewController)->Server_ChangeCharacterState(ECharacterStateType::Normal);
+	}
 }
 
 void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

@@ -10,9 +10,9 @@
 UENUM(BlueprintType)
 enum class ETeamType : uint8
 {
-    None    UMETA(DisplayName = "无队伍"),
-    Blue    UMETA(DisplayName = "蓝队"),
-    Red     UMETA(DisplayName = "红队")
+    None    UMETA(DisplayName = "None"),
+    Blue    UMETA(DisplayName = "Blue"),
+    Red     UMETA(DisplayName = "Red")
 };
 
 /*
@@ -27,17 +27,17 @@ enum class ETeamType : uint8
 保护：起身后短暂进入，无法受到攻击
 */
 UENUM(BlueprintType)
-enum class EStateType : uint8
+enum class ECharacterStateType : uint8
 {
-    Normal          UMETA(DisplayName = "常态"),
-    Armor           UMETA(DisplayName = "硬体"),
-    Unbreakable     UMETA(DisplayName = "霸体"),
-    Adamantine      UMETA(DisplayName = "金刚体"),
-    Staggered       UMETA(DisplayName = "平推"),
-    Launched        UMETA(DisplayName = "击飞"),
-    Downed          UMETA(DisplayName = "倒地"),
-    Grabbed         UMETA(DisplayName = "被抓取"),
-    Invincible      UMETA(DisplayName = "保护")
+    Normal          UMETA(DisplayName = "Normal"),
+    Armor           UMETA(DisplayName = "Armor"),
+    Unbreakable     UMETA(DisplayName = "Unbreakable"),
+    Adamantine      UMETA(DisplayName = "Adamantine"),
+    Staggered       UMETA(DisplayName = "Staggered"),
+    Launched        UMETA(DisplayName = "Launched"),
+    Downed          UMETA(DisplayName = "Downed"),
+    Grabbed         UMETA(DisplayName = "Grabbed"),
+    Invincible      UMETA(DisplayName = "Invincible")
 };
 /**
  * 
@@ -51,8 +51,11 @@ public:
 
     AC_PlayerState();
 
-    UPROPERTY(Replicated)
+    UPROPERTY(Replicated,BlueprintReadWrite)
     ETeamType Team;
+
+    UPROPERTY(Replicated,BlueprintReadWrite)
+    ECharacterStateType CharacterState;
 
     UPROPERTY(Replicated)
     int ClockTime;
