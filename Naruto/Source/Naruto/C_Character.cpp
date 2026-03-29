@@ -50,6 +50,7 @@ void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 void AC_Character::BeginPlay()
 {
 	Super::BeginPlay();
+
 }
 
 void AC_Character::Move(const FInputActionValue& Value)
@@ -75,6 +76,18 @@ void AC_Character::Move(const FInputActionValue& Value)
 	}
 }
 
+void AC_Character::Attack(const FInputActionValue& Value)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS && PS->Attack == 0) {
+		if (IsLocallyControlled()) {
+			int TargetAttack = PS->Attack + 1;
+			PS->Attack = TargetAttack;
+			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
+		}
+	}
+}
+
 void AC_Character::Server_ChangeToward_Implementation()
 {
 	Toward = !Toward;
@@ -96,6 +109,7 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AC_Character::Move);
+		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &AC_Character::Attack);
 	}
 }
 

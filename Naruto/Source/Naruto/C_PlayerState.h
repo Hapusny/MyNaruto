@@ -54,6 +54,9 @@ public:
     UPROPERTY(Replicated,BlueprintReadWrite)
     ETeamType Team;
 
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    int Attack = 0;
+
     UPROPERTY(Replicated,BlueprintReadWrite)
     ECharacterStateType CharacterState;
 

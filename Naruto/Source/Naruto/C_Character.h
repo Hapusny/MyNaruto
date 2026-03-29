@@ -10,7 +10,7 @@ class UInputMappingContext;
 class UInputAction;
 class UPaperFlipbookComponent;
 class UPaperZDAnimationComponent;
-
+class AC_PlayerState;
 struct FInputActionValue;
 
 UCLASS()
@@ -25,8 +25,11 @@ public:
 	UPROPERTY(Replicated)
 	bool Toward = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* MoveAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* AttackAction;
 
 	virtual void PossessedBy(AController* NewController)override;
 
@@ -44,6 +47,8 @@ protected:
 	virtual void BeginPlay() override;
 
 	void Move(const FInputActionValue& Value);
+
+	void Attack(const FInputActionValue& Value);
 
 	UFUNCTION(Server,Reliable)
 	void Server_ChangeToward();

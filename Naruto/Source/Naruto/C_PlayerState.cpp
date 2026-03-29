@@ -20,4 +20,5 @@ void AC_PlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AC_PlayerState, Team);
 	DOREPLIFETIME(AC_PlayerState, ClockTime);
 	DOREPLIFETIME(AC_PlayerState, CharacterState);
+	DOREPLIFETIME(AC_PlayerState, Attack);
 }

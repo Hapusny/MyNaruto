@@ -34,6 +34,9 @@ public:
 	UFUNCTION(Server,Reliable)
 	void Server_ChangeCharacterState(ECharacterStateType TargetCharacterState);
 
+	UFUNCTION(Server, Reliable)
+	void Server_ChangeAttackState(int TargetAttack);
+
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 };
