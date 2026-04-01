@@ -22,7 +22,7 @@ public:
 	// Sets default values for this character's properties
 	AC_Character();
 
-	UPROPERTY(Replicated)
+	UPROPERTY(Replicated,BlueprintReadWrite)
 	bool Toward = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
