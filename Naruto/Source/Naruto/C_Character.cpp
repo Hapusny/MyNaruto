@@ -78,9 +78,11 @@ void AC_Character::Move(const FInputActionValue& Value)
 
 void AC_Character::Attack(const FInputActionValue& Value)
 {
+	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS && PS->Attack == 0) {
+	if (PS && bAttackInputLock == false) {
 		if (IsLocallyControlled()) {
+			bAttackInputLock = true;
 			int TargetAttack = PS->Attack + 1;
 			PS->Attack = TargetAttack;
 			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
@@ -90,10 +92,9 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 void AC_Character::Server_ChangeToward_Implementation()
 {
-	Toward = !Toward;
-	if(Flipbook->GetRelativeRotation().Yaw > 90) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
+	if(!Toward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
 	else Flipbook->SetRelativeRotation(FRotator(180.f, 0.f, -90.f));
-	
+	Toward = !Toward;
 }
 
 // Called every frame
@@ -111,5 +112,10 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AC_Character::Move);
 		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &AC_Character::Attack);
 	}
+}
+
+void AC_Character::StartPreInput()
+{
+
 }
 
