@@ -69,6 +69,9 @@ void AC_Character::Move(const FInputActionValue& Value)
 		// get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
+		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+		if (PS && PS->Attack != 0)return;
+
 		if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
 		// add movement 
 		AddMovementInput(ForwardDirection, MovementVector.Y);
