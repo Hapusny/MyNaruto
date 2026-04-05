@@ -47,6 +47,9 @@ public:
 	UPROPERTY(BlueprintReadWrite)
 	bool bPreInputLock = true;
 
+	UPROPERTY(BlueprintReadWrite)
+	bool bTryToChangeToward = false;
+
 
 protected:
 	// Called when the game starts or when spawned
@@ -56,7 +59,7 @@ protected:
 
 	void Attack(const FInputActionValue& Value);
 
-	UFUNCTION(Server,Reliable)
+	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward();
 
 public:	

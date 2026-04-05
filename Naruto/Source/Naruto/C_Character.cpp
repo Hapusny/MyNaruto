@@ -69,13 +69,16 @@ void AC_Character::Move(const FInputActionValue& Value)
 		// get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-		if (PS && PS->Attack != 0)return;
+		if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))bTryToChangeToward = true;
+		else bTryToChangeToward = false;
 
-		if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
-		// add movement 
-		AddMovementInput(ForwardDirection, MovementVector.Y);
-		AddMovementInput(RightDirection, MovementVector.X);
+		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+		if (PS && PS->Attack == 0) {
+			if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
+			// add movement 
+			AddMovementInput(ForwardDirection, MovementVector.Y);
+			AddMovementInput(RightDirection, MovementVector.X);
+		}
 	}
 }
 
@@ -85,6 +88,7 @@ void AC_Character::Attack(const FInputActionValue& Value)
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (PS && bAttackInputLock == false) {
 		if (IsLocallyControlled()) {
+			if(bTryToChangeToward)Server_ChangeToward();
 			bAttackInputLock = true;
 			int TargetAttack = PS->Attack + 1;
 			PS->Attack = TargetAttack;
