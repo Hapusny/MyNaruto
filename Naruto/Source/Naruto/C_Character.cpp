@@ -11,12 +11,32 @@
 #include "PaperZDAnimInstance.h"
 #include "C_PlayerController.h"
 #include "C_PlayerState.h"
+#include "Components/BoxComponent.h"
 
 // Sets default values
 AC_Character::AC_Character()
 {
  	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
+
+	AttackBox = CreateDefaultSubobject<UBoxComponent>(TEXT("AttackBox"));
+	AttackBox->SetupAttachment(RootComponent);
+	AttackBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	AttackBox->SetCollisionObjectType(ECC_EngineTraceChannel2);
+	AttackBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+	AttackBox->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Overlap);
+	AttackBox->SetIsReplicated(true);
+
+	AttackBox->OnComponentBeginOverlap.AddDynamic(this, &AC_Character::OnAttackBoxOverlap);
+
+	PlayerBox = CreateDefaultSubobject<UBoxComponent>(TEXT("PlayerBox"));
+	PlayerBox->SetupAttachment(RootComponent);
+	PlayerBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	PlayerBox->SetCollisionObjectType(ECC_EngineTraceChannel1);
+	PlayerBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+	PlayerBox->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Overlap);
+	PlayerBox->SetIsReplicated(true);
+
 	Flipbook = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("FlipbookComponent"));
 	PaperZD = CreateDefaultSubobject<UPaperZDAnimationComponent>(TEXT("PaperZDComponent"));
 	if (Flipbook)
@@ -30,6 +50,30 @@ AC_Character::AC_Character()
 	}
 	bReplicates = true;
 	SetReplicateMovement(true);
+}
+
+void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
+{
+	UBoxComponent* TargetBox;
+	if (Box == 0)TargetBox = PlayerBox;
+	else TargetBox = AttackBox;
+	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	TargetBox->SetBoxExtent(Size);
+	Mult_ChangeBoxSize(Size, Box);
+	if (!Toward)Offset.X = -Offset.X;
+	TargetBox->SetRelativeLocation(Offset);
+}
+
+
+void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, int32 Box)
+{
+	UBoxComponent* TargetBox;
+	if (Box == 0)TargetBox = PlayerBox;
+	else TargetBox = AttackBox;
+	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	TargetBox->SetBoxExtent(Size);
 }
 
 void AC_Character::PossessedBy(AController* NewController)
@@ -104,6 +148,13 @@ void AC_Character::Server_ChangeToward_Implementation()
 	Toward = !Toward;
 }
 
+void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
+	if (IsLocallyControlled())return;
+	if (OtherActor == this)return;
+	GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Hello World!"));
+}
+
 // Called every frame
 void AC_Character::Tick(float DeltaTime)
 {
@@ -119,10 +170,5 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AC_Character::Move);
 		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &AC_Character::Attack);
 	}
-}
-
-void AC_Character::StartPreInput()
-{
-
 }
 

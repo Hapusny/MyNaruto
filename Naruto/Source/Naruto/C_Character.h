@@ -11,6 +11,7 @@ class UInputAction;
 class UPaperFlipbookComponent;
 class UPaperZDAnimationComponent;
 class AC_PlayerState;
+class UBoxComponent;
 struct FInputActionValue;
 
 UCLASS()
@@ -21,6 +22,17 @@ class NARUTO_API AC_Character : public ACharacter
 public:
 	// Sets default values for this character's properties
 	AC_Character();
+
+	// 攻击框组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	TObjectPtr<UBoxComponent> AttackBox;
+
+	// 受击框组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	TObjectPtr<UBoxComponent> PlayerBox;
+
+	UFUNCTION(Server,Reliable,BlueprintCallable)
+	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);
 
 	UPROPERTY(Replicated,BlueprintReadWrite)
 	bool Toward = true;
@@ -62,14 +74,22 @@ protected:
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward();
 
+	UFUNCTION(NetMulticast, Reliable)
+	void Mult_ChangeBoxSize(FVector Size, int32 Box);
+
+	UFUNCTION()
+	void OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);
+
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
 	// Called to bind functionality to input
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
-
-	UFUNCTION(BlueprintCallable)
-	void StartPreInput();
 
 };
