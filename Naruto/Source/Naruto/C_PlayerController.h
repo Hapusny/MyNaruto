@@ -42,9 +42,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeAttackState(int TargetAttack);
 
-	UFUNCTION(Server,Reliable)
+	UFUNCTION()
 
-	void Server_PlayerGetDamage(float Damage);
+	void PlayerGetDamage(float Damage);
 
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;

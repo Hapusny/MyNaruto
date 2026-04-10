@@ -151,8 +151,8 @@ void AC_Character::Server_ChangeToward_Implementation()
 void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
 	if (OtherActor == this)return;
-	if (IsLocallyControlled()) {
-		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->Server_PlayerGetDamage(DamageValue);
+	if (HasAuthority()) {
+		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue);
 	}
 }
 
