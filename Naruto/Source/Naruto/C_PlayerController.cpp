@@ -18,6 +18,11 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
+void AC_PlayerController::Server_PlayerGetDamage_Implementation(float Damage)
+{
+	PlayerBeAttacked.Broadcast(this->GetPawn()->GetActorLocation(), Damage);
+}
+
 void AC_PlayerController::Server_ChangeAttackState_Implementation(int TargetAttack)
 {
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();

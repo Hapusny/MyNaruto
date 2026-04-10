@@ -21,4 +21,11 @@ void AC_PlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AC_PlayerState, ClockTime);
 	DOREPLIFETIME(AC_PlayerState, CharacterState);
 	DOREPLIFETIME(AC_PlayerState, Attack);
+	DOREPLIFETIME(AC_PlayerState, HealthValue);
+}
+
+void AC_PlayerState::PlayerGetDamage(FVector Location, float Damage)
+{
+	HealthValue -= Damage;
+	GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, FString::Printf(TEXT("HealthValue:%.2f"), HealthValue));
 }

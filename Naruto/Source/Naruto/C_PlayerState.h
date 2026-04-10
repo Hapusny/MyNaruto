@@ -51,6 +51,9 @@ public:
 
     AC_PlayerState();
 
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    float HealthValue = 100.f;
+
     UPROPERTY(Replicated,BlueprintReadWrite)
     ETeamType Team;
 
@@ -67,4 +70,8 @@ public:
     void SetTeam(ETeamType TargetTeam);
 
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+    UFUNCTION()
+
+    void PlayerGetDamage(FVector Location,float Damage);
 };

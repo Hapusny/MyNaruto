@@ -102,12 +102,14 @@ void AC_ArenaGM::StartFight()
     Player2 = Cast<AC_PlayerController>(Players[1]);
     if (Player1 && PS1)
     {
+        Player1->PlayerBeAttacked.AddUObject(PS1, &AC_PlayerState::PlayerGetDamage);
         Player1->Client_ShowWidget();
         Player1->Client_SetWidgetTime(PS1->ClockTime);
         PS1->ClockTime--;
     }
     if (Player2 && PS2)
     {
+        Player2->PlayerBeAttacked.AddUObject(PS2, &AC_PlayerState::PlayerGetDamage);
         Player2->Client_ShowWidget();
         Player2->Client_SetWidgetTime(PS2->ClockTime);
         PS2->ClockTime--;

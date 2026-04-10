@@ -14,6 +14,8 @@ class AC_PlayerState;
 class UBoxComponent;
 struct FInputActionValue;
 
+
+
 UCLASS()
 class NARUTO_API AC_Character : public ACharacter
 {
@@ -62,6 +64,8 @@ public:
 	UPROPERTY(BlueprintReadWrite)
 	bool bTryToChangeToward = false;
 
+	UPROPERTY(EditAnywhere,BlueprintReadWrite)
+	float DamageValue = 0.f;
 
 protected:
 	// Called when the game starts or when spawned

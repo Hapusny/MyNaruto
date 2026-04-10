@@ -8,6 +8,8 @@
 
 class UInputMappingContext;
 class UC_PlayerWidget;
+
+DECLARE_MULTICAST_DELEGATE_TwoParams(FBeAttacked, FVector, float);
 /**
  * 
  */
@@ -17,6 +19,9 @@ class NARUTO_API AC_PlayerController : public APlayerController
 	GENERATED_BODY()
 	
 public:
+
+	FBeAttacked PlayerBeAttacked;
+
 	virtual void BeginPlay()override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
@@ -36,6 +41,10 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeAttackState(int TargetAttack);
+
+	UFUNCTION(Server,Reliable)
+
+	void Server_PlayerGetDamage(float Damage);
 
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
