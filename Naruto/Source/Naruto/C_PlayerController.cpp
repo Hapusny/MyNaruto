@@ -6,6 +6,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "C_PlayerWidget.h"
 #include "C_PlayerState.h"
+#include "C_Character.h"
 
 void AC_PlayerController::BeginPlay()
 {
@@ -18,9 +19,24 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
-void AC_PlayerController::PlayerGetDamage(float Damage)
+void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
+	if (AttackType == EAttackType::Push) {
+		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
+		GetPlayerState<AC_PlayerState>()->Attack = 0;
+		GetWorldTimerManager().ClearTimer(StaggeredTimerHandle);
+		GetWorldTimerManager().SetTimer(
+			StaggeredTimerHandle,
+			[this]()
+			{
+				GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Normal;
+			},
+			Effect.Z,
+			false
+		);
+		GetPawn()->AddActorLocalOffset(Effect);
+	}
 }
 
 void AC_PlayerController::Server_ChangeAttackState_Implementation(int TargetAttack)

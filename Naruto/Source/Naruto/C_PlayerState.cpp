@@ -27,17 +27,4 @@ void AC_PlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 void AC_PlayerState::PlayerGetDamage(FVector Location, float Damage)
 {
 	HealthValue -= Damage;
-	GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, FString::Printf(TEXT("HealthValue:%.2f"), HealthValue));
-	CharacterState = ECharacterStateType::Staggered;
-    FTimerHandle TimerHandle;
-	GetWorldTimerManager().ClearTimer(TimerHandle);
-    GetWorldTimerManager().SetTimer(
-        TimerHandle,
-        [this]()
-        {
-			CharacterState = ECharacterStateType::Normal;
-        },
-        0.4f,
-        false
-    );
 }

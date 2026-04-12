@@ -152,7 +152,9 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 {
 	if (OtherActor == this)return;
 	if (HasAuthority()) {
-		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue);
+		FVector Effect = DamageEffect;
+		if (DamageType == EAttackType::Push && Toward == false)Effect.X = -Effect.X;
+		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue,DamageType,Effect);
 	}
 }
 

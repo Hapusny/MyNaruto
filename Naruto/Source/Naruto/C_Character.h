@@ -14,7 +14,13 @@ class AC_PlayerState;
 class UBoxComponent;
 struct FInputActionValue;
 
-
+UENUM(BlueprintType)
+enum class EAttackType : uint8
+{
+	Push	UMETA(DisplayName = "Push"),
+	Launch  UMETA(DisplayName = "Launch"),
+	Grab    UMETA(DisplayName = "Grab")
+};
 
 UCLASS()
 class NARUTO_API AC_Character : public ACharacter
@@ -66,6 +72,12 @@ public:
 
 	UPROPERTY(EditAnywhere,BlueprintReadWrite)
 	float DamageValue = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	EAttackType DamageType = EAttackType::Push;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FVector DamageEffect = FVector(0,0,0);
 
 protected:
 	// Called when the game starts or when spawned
