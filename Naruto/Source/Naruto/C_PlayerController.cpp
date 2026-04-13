@@ -22,9 +22,9 @@ void AC_PlayerController::BeginPlay()
 void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
+	GetPlayerState<AC_PlayerState>()->Attack = 0;
 	if (AttackType == EAttackType::Push) {
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
-		GetPlayerState<AC_PlayerState>()->Attack = 0;
 		GetWorldTimerManager().ClearTimer(StaggeredTimerHandle);
 		GetWorldTimerManager().SetTimer(
 			StaggeredTimerHandle,
@@ -35,7 +35,15 @@ void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, F
 			Effect.Z,
 			false
 		);
+		Effect.Z = 0;
 		GetPawn()->AddActorLocalOffset(Effect);
+	}
+	else if (AttackType == EAttackType::Launch) {
+		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
+		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect,true, true);
+	}
+	else {
+
 	}
 }
 

@@ -153,7 +153,7 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 	if (OtherActor == this)return;
 	if (HasAuthority()) {
 		FVector Effect = DamageEffect;
-		if (DamageType == EAttackType::Push && Toward == false)Effect.X = -Effect.X;
+		if (Toward == false)Effect.X = -Effect.X;
 		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue,DamageType,Effect);
 	}
 }
@@ -162,7 +162,9 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 void AC_Character::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-
+	if (GetActorLocation().Z > 0) {
+		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
+	}
 }
 
 // Called to bind functionality to input
