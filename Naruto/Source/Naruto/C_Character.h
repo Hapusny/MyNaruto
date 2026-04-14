@@ -101,6 +101,8 @@ protected:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
+	int LaunchState = 0;
+
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;

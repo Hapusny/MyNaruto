@@ -117,7 +117,7 @@ void AC_Character::Move(const FInputActionValue& Value)
 		else bTryToChangeToward = false;
 
 		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-		if (PS && PS->Attack == 0) {
+		if (PS && PS->Attack == 0  && PS->CharacterState != ECharacterStateType::Staggered && PS->CharacterState != ECharacterStateType::Launched) {
 			if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
 			// add movement 
 			AddMovementInput(ForwardDirection, MovementVector.Y);
@@ -164,6 +164,14 @@ void AC_Character::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	if (GetActorLocation().Z > 0) {
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
+	}
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS && PS->CharacterState == ECharacterStateType::Launched) {
+		if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
+		if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
+			PS->CharacterState = ECharacterStateType::Normal;
+			LaunchState = 0;
+		}
 	}
 }
 
