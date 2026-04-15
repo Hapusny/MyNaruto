@@ -19,31 +19,33 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
-void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect)
+void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect,float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	GetPlayerState<AC_PlayerState>()->Attack = 0;
-	if (AttackType == EAttackType::Push) {
-		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
-		GetWorldTimerManager().ClearTimer(StaggeredTimerHandle);
-		GetWorldTimerManager().SetTimer(
-			StaggeredTimerHandle,
-			[this]()
-			{
-				GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Normal;
-			},
-			Effect.Z,
-			false
-		);
-		Effect.Z = 0;
-		GetPawn()->AddActorLocalOffset(Effect);
-	}
-	else if (AttackType == EAttackType::Launch) {
+	if (AttackType == EAttackType::Launch) {
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect,true, true);
 	}
 	else {
-
+		if (AttackType == EAttackType::Push) {
+			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
+			GetPawn()->AddActorLocalOffset(Effect);
+		}
+		else {
+			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
+			GetPawn()->SetActorLocation(Effect);
+		}
+		GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
+		GetWorldTimerManager().SetTimer(
+			BeAttackedTimerHandle,
+			[this]()
+			{
+				GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Normal;
+			},
+			EffectTime,
+			false
+		);
 	}
 }
 

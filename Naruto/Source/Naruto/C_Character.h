@@ -79,6 +79,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector DamageEffect = FVector(0,0,0);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float EffectTime = 0.f;
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;

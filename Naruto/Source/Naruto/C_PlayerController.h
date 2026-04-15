@@ -44,10 +44,10 @@ public:
 
 	UFUNCTION()
 
-	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect);
+	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
 
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 
-	FTimerHandle StaggeredTimerHandle;
+	FTimerHandle BeAttackedTimerHandle;
 };

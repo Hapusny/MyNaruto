@@ -1,3 +1,4 @@
+
 // Fill out your copyright notice in the Description page of Project Settings.
 
 
@@ -12,6 +13,7 @@
 #include "C_PlayerController.h"
 #include "C_PlayerState.h"
 #include "Components/BoxComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 // Sets default values
 AC_Character::AC_Character()
@@ -154,7 +156,8 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 	if (HasAuthority()) {
 		FVector Effect = DamageEffect;
 		if (Toward == false)Effect.X = -Effect.X;
-		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue,DamageType,Effect);
+		if (DamageType == EAttackType::Grab)Effect = Effect + GetActorLocation();
+		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue,DamageType,Effect,EffectTime);
 	}
 }
 
@@ -172,6 +175,12 @@ void AC_Character::Tick(float DeltaTime)
 			PS->CharacterState = ECharacterStateType::Normal;
 			LaunchState = 0;
 		}
+	}
+	if (PS && PS->CharacterState == ECharacterStateType::Grabbed) {
+		GetCharacterMovement()->GravityScale = 0.f;
+	}
+	else {
+		GetCharacterMovement()->GravityScale = 1.f;
 	}
 }
 
