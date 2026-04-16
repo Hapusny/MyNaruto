@@ -28,20 +28,23 @@ void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, F
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect,true, true);
 	}
 	else {
+		ECharacterStateType TargetType;
 		if (AttackType == EAttackType::Push) {
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
+			TargetType = ECharacterStateType::Normal;
 			GetPawn()->AddActorLocalOffset(Effect);
 		}
 		else {
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
+			TargetType = ECharacterStateType::Launched;
 			GetPawn()->SetActorLocation(Effect);
 		}
 		GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 		GetWorldTimerManager().SetTimer(
 			BeAttackedTimerHandle,
-			[this]()
+			[this,TargetType]()
 			{
-				GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Normal;
+				GetPlayerState<AC_PlayerState>()->CharacterState = TargetType;
 			},
 			EffectTime,
 			false
