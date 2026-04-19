@@ -14,6 +14,8 @@
 #include "C_PlayerState.h"
 #include "Components/BoxComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/GameStateBase.h"
 
 // Sets default values
 AC_Character::AC_Character()
@@ -143,6 +145,39 @@ void AC_Character::Attack(const FInputActionValue& Value)
 	}
 }
 
+void AC_Character::Escape(const FInputActionValue& Value)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	FVector TargetPlace = GetActorLocation();
+	if (!HasAuthority())return;
+	if (!PS)return;
+	if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
+		AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+		if (GameState) {
+			for (APlayerState* OtherPS : GameState->PlayerArray) {
+				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
+					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
+					if (Distance <= EscapeRange)TargetPlace = OtherPS->GetPawn()->GetActorLocation();
+				}
+			}
+		}
+	}
+	SetActorLocation(TargetPlace);
+	PS->CharacterState = ECharacterStateType::Normal;
+}
+
+void AC_Character::FirstSkill(const FInputActionValue& Value)
+{
+}
+
+void AC_Character::SecondSkill(const FInputActionValue& Value)
+{
+}
+
+void AC_Character::FinalSkill(const FInputActionValue& Value)
+{
+}
+
 void AC_Character::Server_ChangeToward_Implementation()
 {
 	if(!Toward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
@@ -191,6 +226,10 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AC_Character::Move);
 		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &AC_Character::Attack);
+		EnhancedInputComponent->BindAction(EscapeAction, ETriggerEvent::Triggered, this, &AC_Character::Escape);
+		EnhancedInputComponent->BindAction(FirstSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FirstSkill);
+		EnhancedInputComponent->BindAction(SecondSkillAction, ETriggerEvent::Triggered, this, &AC_Character::SecondSkill);
+		EnhancedInputComponent->BindAction(FinalSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FirstSkill);
 	}
 }
 

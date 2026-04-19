@@ -51,6 +51,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* AttackAction;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* EscapeAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* FirstSkillAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* SecondSkillAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* FinalSkillAction;
+
 	virtual void PossessedBy(AController* NewController)override;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -82,6 +94,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float EffectTime = 0.f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float EscapeRange = 0.f;
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -89,6 +104,15 @@ protected:
 	void Move(const FInputActionValue& Value);
 
 	void Attack(const FInputActionValue& Value);
+
+	void Escape(const FInputActionValue& Value);
+
+	void FirstSkill(const FInputActionValue& Value);
+
+	void SecondSkill(const FInputActionValue& Value);
+
+	void FinalSkill(const FInputActionValue& Value);
+
 
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward();

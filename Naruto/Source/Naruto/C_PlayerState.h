@@ -36,8 +36,7 @@ enum class ECharacterStateType : uint8
     Staggered       UMETA(DisplayName = "Staggered"),
     Launched        UMETA(DisplayName = "Launched"),
     Downed          UMETA(DisplayName = "Downed"),
-    Grabbed         UMETA(DisplayName = "Grabbed"),
-    Invincible      UMETA(DisplayName = "Invincible")
+    Grabbed         UMETA(DisplayName = "Grabbed")
 };
 /**
  * 
