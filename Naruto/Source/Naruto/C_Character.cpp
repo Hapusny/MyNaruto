@@ -147,13 +147,15 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 void AC_Character::Escape(const FInputActionValue& Value)
 {
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	FVector TargetPlace = GetActorLocation();
 	if (!HasAuthority())return;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!GameState)return;
 	if (!PS)return;
-	if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
-		AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-		if (GameState) {
+	if (LastEscapeTime == 0.f || GameState->GetServerWorldTimeSeconds() - LastEscapeTime >= EscapeCD) {
+		LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+		FVector TargetPlace = GetActorLocation();
+		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
 			for (APlayerState* OtherPS : GameState->PlayerArray) {
 				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
 					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
@@ -161,9 +163,9 @@ void AC_Character::Escape(const FInputActionValue& Value)
 				}
 			}
 		}
+		SetActorLocation(TargetPlace);
+		PS->CharacterState = ECharacterStateType::Normal;
 	}
-	SetActorLocation(TargetPlace);
-	PS->CharacterState = ECharacterStateType::Normal;
 }
 
 void AC_Character::FirstSkill(const FInputActionValue& Value)
@@ -216,6 +218,9 @@ void AC_Character::Tick(float DeltaTime)
 	}
 	else {
 		GetCharacterMovement()->GravityScale = 1.f;
+	}
+	if (LastEscapeTime != 0.f) {
+		GEngine->AddOnScreenDebugMessage(1, 5.0f, FColor::Green,FString::Printf(TEXT("Time: %.2f"), GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime));
 	}
 }
 
