@@ -132,7 +132,7 @@ protected:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
-	int LaunchState = 0;
+	int32 LaunchState = 0;
 
 public:	
 	// Called every frame

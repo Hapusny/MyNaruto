@@ -53,6 +53,9 @@ public:
     UPROPERTY(Replicated, BlueprintReadWrite)
     float HealthValue = 100.f;
 
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    int32 Chakra = 2;
+
     UPROPERTY(Replicated,BlueprintReadWrite)
     ETeamType Team;
 
@@ -63,7 +66,7 @@ public:
     ECharacterStateType CharacterState;
 
     UPROPERTY(Replicated)
-    int ClockTime;
+    int32 ClockTime;
 
     UFUNCTION()
     void SetTeam(ETeamType TargetTeam);

@@ -147,11 +147,12 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 void AC_Character::Escape(const FInputActionValue& Value)
 {
-	if (!HasAuthority())return;
+	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!GameState)return;
 	if (!PS)return;
+	if (PS->Chakra == 0)return;
 	if (LastEscapeTime == 0.f || GameState->GetServerWorldTimeSeconds() - LastEscapeTime >= EscapeCD) {
 		LastEscapeTime = GameState->GetServerWorldTimeSeconds();
 		FVector TargetPlace = GetActorLocation();
@@ -164,7 +165,8 @@ void AC_Character::Escape(const FInputActionValue& Value)
 			}
 		}
 		SetActorLocation(TargetPlace);
-		PS->CharacterState = ECharacterStateType::Normal;
+		Cast<AC_PlayerController>(Controller)->Server_ChangeCharacterState(ECharacterStateType::Normal);
+		Cast<AC_PlayerController>(Controller)->Server_EscapeEffect();
 	}
 }
 
@@ -206,21 +208,23 @@ void AC_Character::Tick(float DeltaTime)
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
 	}
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS && PS->CharacterState == ECharacterStateType::Launched) {
+	if (!PS)return;
+	if (PS->CharacterState == ECharacterStateType::Launched) {
 		if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
 		if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
 			PS->CharacterState = ECharacterStateType::Normal;
 			LaunchState = 0;
 		}
 	}
-	if (PS && PS->CharacterState == ECharacterStateType::Grabbed) {
+	if (PS->CharacterState == ECharacterStateType::Grabbed) {
 		GetCharacterMovement()->GravityScale = 0.f;
 	}
 	else {
 		GetCharacterMovement()->GravityScale = 1.f;
 	}
+	GEngine->AddOnScreenDebugMessage(-1, 0.06f, FColor::Blue, FString::Printf(TEXT("Chakra: %d"), PS->Chakra));
 	if (LastEscapeTime != 0.f) {
-		GEngine->AddOnScreenDebugMessage(1, 5.0f, FColor::Green,FString::Printf(TEXT("Time: %.2f"), GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime));
+		GEngine->AddOnScreenDebugMessage(-1, 0.06f, FColor::Green,FString::Printf(TEXT("Time: %.2f"), GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime));
 	}
 }
 

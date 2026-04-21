@@ -19,6 +19,11 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
+void AC_PlayerController::Server_EscapeEffect_Implementation()
+{
+	GetPlayerState<AC_PlayerState>()->Chakra--;
+}
+
 void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect,float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);

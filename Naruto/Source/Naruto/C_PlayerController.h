@@ -42,6 +42,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeAttackState(int TargetAttack);
 
+	UFUNCTION(Server, Reliable)
+	void Server_EscapeEffect();
+
 	UFUNCTION()
 
 	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
