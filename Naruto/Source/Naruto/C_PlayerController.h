@@ -43,6 +43,9 @@ public:
 	void Server_ChangeAttackState(int TargetAttack);
 
 	UFUNCTION(Server, Reliable)
+	void Server_ChangeSkillState(int TargetSkill);
+
+	UFUNCTION(Server, Reliable)
 	void Server_EscapeEffect();
 
 	UFUNCTION()

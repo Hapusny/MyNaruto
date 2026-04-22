@@ -62,6 +62,9 @@ public:
     UPROPERTY(Replicated, BlueprintReadWrite)
     int Attack = 0;
 
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    int MySkill = 0;
+
     UPROPERTY(Replicated,BlueprintReadWrite)
     ECharacterStateType CharacterState;
 

@@ -139,7 +139,6 @@ void AC_Character::Attack(const FInputActionValue& Value)
 			if(bTryToChangeToward)Server_ChangeToward();
 			bAttackInputLock = true;
 			int TargetAttack = PS->Attack + 1;
-			PS->Attack = TargetAttack;
 			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
 		}
 	}
@@ -172,6 +171,12 @@ void AC_Character::Escape(const FInputActionValue& Value)
 
 void AC_Character::FirstSkill(const FInputActionValue& Value)
 {
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		if (IsLocallyControlled()) {
+			Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
+		}
+	}
 }
 
 void AC_Character::SecondSkill(const FInputActionValue& Value)
@@ -238,7 +243,7 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EnhancedInputComponent->BindAction(EscapeAction, ETriggerEvent::Triggered, this, &AC_Character::Escape);
 		EnhancedInputComponent->BindAction(FirstSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FirstSkill);
 		EnhancedInputComponent->BindAction(SecondSkillAction, ETriggerEvent::Triggered, this, &AC_Character::SecondSkill);
-		EnhancedInputComponent->BindAction(FinalSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FirstSkill);
+		EnhancedInputComponent->BindAction(FinalSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FinalSkill);
 	}
 }
 

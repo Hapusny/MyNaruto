@@ -23,6 +23,7 @@ void AC_PlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AC_PlayerState, Attack);
 	DOREPLIFETIME(AC_PlayerState, HealthValue);
 	DOREPLIFETIME(AC_PlayerState, Chakra);
+	DOREPLIFETIME(AC_PlayerState, MySkill);
 }
 
 void AC_PlayerState::PlayerGetDamage(FVector Location, float Damage)

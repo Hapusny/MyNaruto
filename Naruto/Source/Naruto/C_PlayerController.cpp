@@ -24,6 +24,15 @@ void AC_PlayerController::Server_EscapeEffect_Implementation()
 	GetPlayerState<AC_PlayerState>()->Chakra--;
 }
 
+void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		PS->MySkill = TargetSkill;
+		GEngine->AddOnScreenDebugMessage(-1, 1.f, FColor::Blue, FString::Printf(TEXT("Skill: %d"), PS->MySkill));
+	}
+}
+
 void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect,float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
