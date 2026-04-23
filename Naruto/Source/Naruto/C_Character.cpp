@@ -181,6 +181,12 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 
 void AC_Character::SecondSkill(const FInputActionValue& Value)
 {
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		if (IsLocallyControlled()) {
+			Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
+		}
+	}
 }
 
 void AC_Character::FinalSkill(const FInputActionValue& Value)
