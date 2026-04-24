@@ -193,6 +193,14 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 {
 }
 
+void AC_Character::Scroll(const FInputActionValue& Value)
+{
+}
+
+void AC_Character::Summon(const FInputActionValue& Value)
+{
+}
+
 void AC_Character::Server_ChangeToward_Implementation()
 {
 	if(!Toward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
@@ -250,6 +258,8 @@ void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EnhancedInputComponent->BindAction(FirstSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FirstSkill);
 		EnhancedInputComponent->BindAction(SecondSkillAction, ETriggerEvent::Triggered, this, &AC_Character::SecondSkill);
 		EnhancedInputComponent->BindAction(FinalSkillAction, ETriggerEvent::Triggered, this, &AC_Character::FinalSkill);
+		EnhancedInputComponent->BindAction(ScrollAction, ETriggerEvent::Triggered, this, &AC_Character::Scroll);
+		EnhancedInputComponent->BindAction(SummonAction, ETriggerEvent::Triggered, this, &AC_Character::Summon);
 	}
 }
 

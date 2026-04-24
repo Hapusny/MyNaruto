@@ -63,6 +63,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* FinalSkillAction;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* ScrollAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* SummonAction;
+
 	virtual void PossessedBy(AController* NewController)override;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -116,6 +122,10 @@ protected:
 	void SecondSkill(const FInputActionValue& Value);
 
 	void FinalSkill(const FInputActionValue& Value);
+
+	void Scroll(const FInputActionValue& Value);
+
+	void Summon(const FInputActionValue& Value);
 
 
 	UFUNCTION(Server,Reliable,BlueprintCallable)
