@@ -106,6 +106,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float EscapeCD = 15.f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+
+	float EscapeCDState = 0.f;
+
 
 protected:
 	// Called when the game starts or when spawned
