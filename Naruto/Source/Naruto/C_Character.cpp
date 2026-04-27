@@ -226,6 +226,10 @@ void AC_Character::Tick(float DeltaTime)
 	if (GetActorLocation().Z > 0) {
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
 	}
+	if (GetActorLocation().X > MaxLocation.X)SetActorLocation(FVector(MaxLocation.X, GetActorLocation().Y, GetActorLocation().Z));
+	if (GetActorLocation().Y > MaxLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MaxLocation.Y, GetActorLocation().Z));
+	if (GetActorLocation().X < MinLocation.X)SetActorLocation(FVector(MinLocation.X, GetActorLocation().Y, GetActorLocation().Z));
+	if (GetActorLocation().Y < MinLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MinLocation.Y, GetActorLocation().Z));
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
 	if (PS->CharacterState == ECharacterStateType::Launched) {

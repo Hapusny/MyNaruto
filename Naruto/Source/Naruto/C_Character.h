@@ -110,6 +110,12 @@ public:
 
 	float EscapeCDState = 0.f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FVector MaxLocation = FVector(800.f,280.f,0.f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FVector MinLocation = FVector(-800.f, 80.f, 0.f);
+
 
 protected:
 	// Called when the game starts or when spawned
