@@ -245,9 +245,7 @@ void AC_Character::Tick(float DeltaTime)
 	else {
 		GetCharacterMovement()->GravityScale = 1.f;
 	}
-	GEngine->AddOnScreenDebugMessage(-1, 0.06f, FColor::Blue, FString::Printf(TEXT("Chakra: %d"), PS->Chakra));
 	if (LastEscapeTime != 0.f) {
-		GEngine->AddOnScreenDebugMessage(-1, 0.06f, FColor::Green,FString::Printf(TEXT("Time: %.2f"), GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime));
 		EscapeCDState = EscapeCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime);
 		if (EscapeCDState <= 0.f)EscapeCDState = 0.f;
 	}
