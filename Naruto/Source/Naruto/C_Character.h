@@ -10,8 +10,10 @@ class UInputMappingContext;
 class UInputAction;
 class UPaperFlipbookComponent;
 class UPaperZDAnimationComponent;
+class UPaperSpriteComponent;
 class AC_PlayerState;
 class UBoxComponent;
+enum class ETeamType : uint8;
 struct FInputActionValue;
 
 UENUM(BlueprintType)
@@ -31,6 +33,10 @@ public:
 	// Sets default values for this character's properties
 	AC_Character();
 
+	virtual void OnRep_PlayerState() override;
+
+	void MyInitialize(ETeamType team);
+
 	// 攻击框组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<UBoxComponent> AttackBox;
@@ -38,6 +44,10 @@ public:
 	// 受击框组件
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<UBoxComponent> PlayerBox;
+
+	// 位置标记组件
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	TObjectPtr<UPaperSpriteComponent> PlaceMark;
 
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);

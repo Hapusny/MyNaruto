@@ -8,6 +8,7 @@
 #include "InputActionValue.h"
 #include "Net/UnrealNetwork.h"
 #include "PaperFlipbookComponent.h"
+#include "PaperSpriteComponent.h"
 #include "PaperZDAnimationComponent.h"
 #include "PaperZDAnimInstance.h"
 #include "C_PlayerController.h"
@@ -41,8 +42,14 @@ AC_Character::AC_Character()
 	PlayerBox->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Overlap);
 	PlayerBox->SetIsReplicated(true);
 
+	PlaceMark = CreateDefaultSubobject<UPaperSpriteComponent>(TEXT("PaperSpriteComponent"));
 	Flipbook = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("FlipbookComponent"));
 	PaperZD = CreateDefaultSubobject<UPaperZDAnimationComponent>(TEXT("PaperZDComponent"));
+	if (PlaceMark) {
+		PlaceMark->SetupAttachment(RootComponent);
+		PlaceMark->SetRelativeRotation(FRotator(0.f, 0.0f, -90.0f));
+		PlaceMark->SetIsReplicated(true);
+	}
 	if (Flipbook)
 	{
 		Flipbook->SetupAttachment(RootComponent);
@@ -56,14 +63,30 @@ AC_Character::AC_Character()
 	SetReplicateMovement(true);
 }
 
+void AC_Character::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	if (HasAuthority())return;
+	MyInitialize(Cast<AC_PlayerState>(GetPlayerState())->Team);
+}
+
+void AC_Character::MyInitialize(ETeamType team)
+{
+	if (team == ETeamType::Red) {
+		if(Toward)Server_ChangeToward_Implementation();
+		PlaceMark->SetSpriteColor(FColor::Red);
+	}
+	else {
+		if(!Toward)Server_ChangeToward_Implementation();
+		PlaceMark->SetSpriteColor(FColor::Blue);
+	}
+}
+
 void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
 {
 	UBoxComponent* TargetBox;
 	if (Box == 0)TargetBox = PlayerBox;
 	else TargetBox = AttackBox;
-	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	TargetBox->SetBoxExtent(Size);
 	Mult_ChangeBoxSize(Size, Box);
 	if (!Toward)Offset.X = -Offset.X;
 	TargetBox->SetRelativeLocation(Offset);

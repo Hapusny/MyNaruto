@@ -10,6 +10,7 @@ class AC_Character;
 class AC_Camera;
 class AC_PlayerController;
 class AC_PlayerState;
+class AC_ArenaGS;
 /**
  * 
  */
@@ -22,38 +23,51 @@ class NARUTO_API AC_ArenaGM : public AGameMode
 public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
+	//玩家选择的忍者
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<AC_Character>Player1Pawn;
 
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<AC_Character>Player2Pawn;
 
+
+	//玩家视角摄像头
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<AC_Camera>PlayerCameraClass;
 
+	//对战回合时间
+	UPROPERTY(EditAnywhere)
+	float GameFightTime = 60.f;
+
+	
 
 protected:
-	virtual void BeginPlay()override;
+	virtual void Tick(float DeltaSeconds) override;//处理时间更新及结算判定
 
 private:
+
+	UPROPERTY()
+	TObjectPtr<AC_ArenaGS>MyGameState;
+
 	UPROPERTY()
 	TArray<APlayerController*> Players;
 
+	//玩家1和玩家2的相关类
+	UPROPERTY()
 	TObjectPtr<AC_PlayerController>Player1;
 
+	UPROPERTY()
 	TObjectPtr<AC_PlayerController>Player2;
 
+	UPROPERTY()
 	TObjectPtr<AC_PlayerState>PS1;
 
+	UPROPERTY()
 	TObjectPtr<AC_PlayerState>PS2;
 
-	void AssignTeams();
+	void AssignTeams();//分配队伍
 
-	void SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player);
+	void SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player);//为玩家生成选择的忍者
 
-	void StartFight();
-
-	FTimerHandle ClockHandle;
-
-	void ClockChange();
+	void StartFight();//战斗回合开始
 };

@@ -57,7 +57,7 @@ public:
     int32 Chakra = 2;
 
     UPROPERTY(Replicated,BlueprintReadWrite)
-    ETeamType Team;
+    ETeamType Team = ETeamType::None;
 
     UPROPERTY(Replicated, BlueprintReadWrite)
     int Attack = 0;
@@ -66,10 +66,7 @@ public:
     int MySkill = 0;
 
     UPROPERTY(Replicated,BlueprintReadWrite)
-    ECharacterStateType CharacterState;
-
-    UPROPERTY(Replicated)
-    int32 ClockTime;
+    ECharacterStateType CharacterState = ECharacterStateType::Normal;
 
     UFUNCTION()
     void SetTeam(ETeamType TargetTeam);

@@ -20,22 +20,29 @@ class NARUTO_API AC_PlayerController : public APlayerController
 	
 public:
 
+	//角色受击委托
 	FBeAttacked PlayerBeAttacked;
 
 	virtual void BeginPlay()override;
 
+	//输入映射
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputMappingContext* DefaultMappingContext;
 
+	//玩家UI
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<UC_PlayerWidget>PlayerWidgetClass;
 
+	//显示UI
 	UFUNCTION(Client,Reliable)
 	void Client_ShowWidget();
 
+	//更新UI
 	UFUNCTION(Client, Reliable)
 	void Client_SetWidgetTime(int time);
 
+
+	//角色状态相关更新
 	UFUNCTION(Server,Reliable)
 	void Server_ChangeCharacterState(ECharacterStateType TargetCharacterState);
 
@@ -48,6 +55,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_EscapeEffect();
 
+	//角色受击
 	UFUNCTION()
 
 	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
