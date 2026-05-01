@@ -67,7 +67,23 @@ void AC_Character::OnRep_PlayerState()
 {
 	Super::OnRep_PlayerState();
 	if (HasAuthority())return;
-	MyInitialize(Cast<AC_PlayerState>(GetPlayerState())->Team);
+	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
+	if (!PS)return;
+
+	//Team同步完毕直接初始化，反之绑定委托等待同步
+	if (Cast<AC_PlayerState>(GetPlayerState())->Team == ETeamType::None) {
+		PS->OnTeamChanged.AddDynamic(this, &AC_Character::OnTeamChanged);
+	}
+	else MyInitialize(Cast<AC_PlayerState>(GetPlayerState())->Team);
+}
+
+void AC_Character::OnTeamChanged()
+{
+	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
+	if (PS && PS->Team != ETeamType::None)
+	{
+		MyInitialize(PS->Team);
+	}
 }
 
 void AC_Character::MyInitialize(ETeamType team)

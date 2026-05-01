@@ -35,6 +35,9 @@ public:
 
 	virtual void OnRep_PlayerState() override;
 
+	UFUNCTION()
+	void OnTeamChanged();
+
 	void MyInitialize(ETeamType team);
 
 	// ¹¥»÷¿ò×é¼þ

@@ -17,10 +17,30 @@ void AC_ArenaGM::PostLogin(APlayerController* NewPlayer)
     if (NewPlayer)
     {
         Players.Add(NewPlayer);
+        UE_LOG(LogTemp, Warning, TEXT("PlayerAdd"));
     }
     if (Players.Num() == 2) //玩家数为2时分配队伍
     {
         AssignTeams();
+    }
+}
+
+
+void AC_ArenaGM::HandleSeamlessTravelPlayer(AController*& C)
+{
+    Super::HandleSeamlessTravelPlayer(C);
+
+    APlayerController* PC = Cast<APlayerController>(C);
+    if (PC)
+    {
+        Players.AddUnique(PC);
+
+        if (Players.Num() == 2)
+        {
+            //玩家数为2时分配队伍
+            FTimerHandle TimerHandle;
+            GetWorldTimerManager().SetTimer(TimerHandle, this, &AC_ArenaGM::AssignTeams, 0.2f, false);
+        }
     }
 }
 

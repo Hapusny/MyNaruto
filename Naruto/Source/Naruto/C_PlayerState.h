@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerState.h"
 #include "C_PlayerState.generated.h"
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTeamChanged);
 
 UENUM(BlueprintType)
 enum class ETeamType : uint8
@@ -50,14 +51,19 @@ public:
 
     AC_PlayerState();
 
+    FOnTeamChanged OnTeamChanged;
+
     UPROPERTY(Replicated, BlueprintReadWrite)
     float HealthValue = 100.f;
 
     UPROPERTY(Replicated, BlueprintReadWrite)
     int32 Chakra = 2;
 
-    UPROPERTY(Replicated,BlueprintReadWrite)
+    UPROPERTY(ReplicatedUsing = OnRep_Team,BlueprintReadWrite)
     ETeamType Team = ETeamType::None;
+
+    UFUNCTION()
+    void OnRep_Team();
 
     UPROPERTY(Replicated, BlueprintReadWrite)
     int Attack = 0;
