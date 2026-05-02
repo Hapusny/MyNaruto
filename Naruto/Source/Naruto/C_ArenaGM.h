@@ -21,8 +21,8 @@ class NARUTO_API AC_ArenaGM : public AGameMode
 	
 
 public:
-	virtual void PostLogin(APlayerController* NewPlayer) override;
-	virtual void HandleSeamlessTravelPlayer(AController*& C) override;
+	virtual void PostLogin(APlayerController* NewPlayer) override;//PIE中处理玩家入场
+	virtual void HandleSeamlessTravelPlayer(AController*& C) override;//玩家入场后开始初始化
 
 	//玩家选择的忍者
 	UPROPERTY(EditAnywhere)

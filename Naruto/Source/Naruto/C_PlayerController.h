@@ -8,6 +8,8 @@
 
 class UInputMappingContext;
 class UC_PlayerWidget;
+class AC_PlayerState;
+class AC_Character;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FBeAttacked, FVector, float);
 /**
@@ -52,16 +54,32 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeSkillState(int TargetSkill);
 
+
+	//替身效果
 	UFUNCTION(Server, Reliable)
 	void Server_EscapeEffect();
 
 	//角色受击
 	UFUNCTION()
-
 	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
+
+protected:
+	virtual void Tick(float DeltaSeconds) override;//更新UI
 
 private:
 	TObjectPtr<UC_PlayerWidget>PlayerWidget;
 
 	FTimerHandle BeAttackedTimerHandle;
+
+	//双方玩家状态
+	UPROPERTY()
+	TObjectPtr<AC_PlayerState>PS1;
+
+	UPROPERTY()
+	TObjectPtr<AC_PlayerState>PS2;
+
+	//玩家的忍者
+	UPROPERTY()
+	TObjectPtr<AC_Character>MyPawn;
+
 };

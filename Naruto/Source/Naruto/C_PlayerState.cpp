@@ -6,12 +6,12 @@
 
 AC_PlayerState::AC_PlayerState()
 {
-	NetUpdateFrequency = 60.f;
+	NetUpdateFrequency = 60.f;//网络同步频率
 }
 
 void AC_PlayerState::OnRep_Team()
 {
-	OnTeamChanged.Broadcast();
+	OnTeamChanged.Broadcast();//队伍分配情况广播给忍者
 }
 
 void AC_PlayerState::SetTeam(ETeamType TargetTeam)

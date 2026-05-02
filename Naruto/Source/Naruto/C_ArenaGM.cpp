@@ -46,6 +46,7 @@ void AC_ArenaGM::HandleSeamlessTravelPlayer(AController*& C)
 
 void AC_ArenaGM::Tick(float DeltaSeconds)
 {
+    Super::Tick(DeltaSeconds);
     //更新时间
     if (MyGameState && MyGameState->FightStartTime != 0.f) {//战斗开始启动时钟后
         float ClockTime = GameFightTime - (GameState->GetServerWorldTimeSeconds() - Cast<AC_ArenaGS>(GameState)->FightStartTime);//比赛剩余时间

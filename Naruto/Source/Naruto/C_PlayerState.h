@@ -8,6 +8,7 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTeamChanged);
 
+//队伍
 UENUM(BlueprintType)
 enum class ETeamType : uint8
 {
@@ -51,13 +52,9 @@ public:
 
     AC_PlayerState();
 
+
+    //队伍相关
     FOnTeamChanged OnTeamChanged;
-
-    UPROPERTY(Replicated, BlueprintReadWrite)
-    float HealthValue = 100.f;
-
-    UPROPERTY(Replicated, BlueprintReadWrite)
-    int32 Chakra = 2;
 
     UPROPERTY(ReplicatedUsing = OnRep_Team,BlueprintReadWrite)
     ETeamType Team = ETeamType::None;
@@ -65,6 +62,19 @@ public:
     UFUNCTION()
     void OnRep_Team();
 
+    UFUNCTION()
+    void SetTeam(ETeamType TargetTeam);
+
+
+    //角色数值
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    float HealthValue = 100.f;
+
+    UPROPERTY(Replicated, BlueprintReadWrite)
+    int32 Chakra = 2;
+
+
+    //角色状态
     UPROPERTY(Replicated, BlueprintReadWrite)
     int Attack = 0;
 
@@ -74,12 +84,12 @@ public:
     UPROPERTY(Replicated,BlueprintReadWrite)
     ECharacterStateType CharacterState = ECharacterStateType::Normal;
 
-    UFUNCTION()
-    void SetTeam(ETeamType TargetTeam);
 
+    //网络同步
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-    UFUNCTION()
 
+    //角色受击委托处理
+    UFUNCTION()
     void PlayerGetDamage(FVector Location,float Damage);
 };

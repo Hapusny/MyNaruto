@@ -7,10 +7,13 @@
 #include "C_PlayerWidget.h"
 #include "C_PlayerState.h"
 #include "C_Character.h"
+#include "GameFramework/GameStateBase.h"
 
 void AC_PlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+
+	//绑定输入映射
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 	{
 		Subsystem->AddMappingContext(DefaultMappingContext, 0);
@@ -19,27 +22,27 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
-void AC_PlayerController::Server_EscapeEffect_Implementation()
+void AC_PlayerController::Tick(float DeltaSeconds)
 {
-	GetPlayerState<AC_PlayerState>()->Chakra--;
+	Super::Tick(DeltaSeconds);
+	
+
+	//本地每帧更新角色UI
+	if (!IsLocalController())return;
+	
+	if (PlayerWidget && PS1 && PS2 && MyPawn)PlayerWidget->SetUIShow(
+		PS1->HealthValue,PS2->HealthValue,PS1->Chakra,PS2->Chakra,
+		MyPawn->EscapeCDState
+	);
 }
 
-void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill)
-{
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS) {
-		PS->MySkill = TargetSkill;
-		GEngine->AddOnScreenDebugMessage(-1, 1.f, FColor::Blue, FString::Printf(TEXT("Skill: %d"), PS->MySkill));
-	}
-}
-
-void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, FVector Effect,float EffectTime)
+void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, FVector Effect, float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	GetPlayerState<AC_PlayerState>()->Attack = 0;
 	if (AttackType == EAttackType::Launch) {
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
-		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect,true, true);
+		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect, true, true);
 	}
 	else {
 		ECharacterStateType TargetType;
@@ -56,7 +59,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage,EAttackType AttackType, F
 		GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 		GetWorldTimerManager().SetTimer(
 			BeAttackedTimerHandle,
-			[this,TargetType]()
+			[this, TargetType]()
 			{
 				GetPlayerState<AC_PlayerState>()->CharacterState = TargetType;
 			},
@@ -82,6 +85,20 @@ void AC_PlayerController::Server_ChangeCharacterState_Implementation(ECharacterS
 	}
 }
 
+void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		PS->MySkill = TargetSkill;
+	}
+}
+
+void AC_PlayerController::Server_EscapeEffect_Implementation()
+{
+	//替身后查克拉减少
+	GetPlayerState<AC_PlayerState>()->Chakra--;
+}
+
 
 void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)
 {
@@ -92,5 +109,17 @@ void AC_PlayerController::Client_ShowWidget_Implementation()
 {
 	if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);
 	PlayerWidget->AddToViewport();
+
+	//获取双方玩家状态以及自身忍者以更新UI
+	if (AGameStateBase* GS = GetWorld()->GetGameState())
+	{
+		for (APlayerState* PS : GS->PlayerArray)
+		{
+			AC_PlayerState* MyPS = Cast<AC_PlayerState>(PS);
+			if (MyPS && MyPS->Team == ETeamType::Blue)PS1 = MyPS;
+			if (MyPS && MyPS->Team == ETeamType::Red)PS2 = MyPS;
+		}
+	}
+	MyPawn = Cast<AC_Character>(GetPawn());
 }
 

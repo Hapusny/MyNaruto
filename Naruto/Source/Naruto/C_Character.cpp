@@ -89,11 +89,11 @@ void AC_Character::OnTeamChanged()
 void AC_Character::MyInitialize(ETeamType team)
 {
 	if (team == ETeamType::Red) {
-		if(Toward)Server_ChangeToward_Implementation();
+		if(Toward)Server_ChangeToward_Implementation(false);
 		PlaceMark->SetSpriteColor(FColor::Red);
 	}
 	else {
-		if(!Toward)Server_ChangeToward_Implementation();
+		if(!Toward)Server_ChangeToward_Implementation(true);
 		PlaceMark->SetSpriteColor(FColor::Blue);
 	}
 }
@@ -156,12 +156,13 @@ void AC_Character::Move(const FInputActionValue& Value)
 		// get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))bTryToChangeToward = true;
-		else bTryToChangeToward = false;
+		if (MovementVector.Y > 0)bTryTargetToward = true;
+		if (MovementVector.Y < 0)bTryTargetToward = false;
 
 		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 		if (PS && PS->Attack == 0  && PS->CharacterState != ECharacterStateType::Staggered && PS->CharacterState != ECharacterStateType::Launched) {
-			if ((MovementVector.Y > 0 && !Toward) || (MovementVector.Y < 0 && Toward))Server_ChangeToward();
+			if (MovementVector.Y > 0 && !Toward)Server_ChangeToward(true);
+			if (MovementVector.Y < 0 && Toward)Server_ChangeToward(false);
 			// add movement 
 			AddMovementInput(ForwardDirection, MovementVector.Y);
 			AddMovementInput(RightDirection, MovementVector.X);
@@ -175,7 +176,7 @@ void AC_Character::Attack(const FInputActionValue& Value)
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (PS && bAttackInputLock == false) {
 		if (IsLocallyControlled()) {
-			if(bTryToChangeToward)Server_ChangeToward();
+			Server_ChangeToward(bTryTargetToward);
 			bAttackInputLock = true;
 			int TargetAttack = PS->Attack + 1;
 			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
@@ -192,19 +193,19 @@ void AC_Character::Escape(const FInputActionValue& Value)
 	if (!PS)return;
 	if (PS->Chakra == 0)return;
 	if (LastEscapeTime == 0.f || GameState->GetServerWorldTimeSeconds() - LastEscapeTime >= EscapeCD) {
-		LastEscapeTime = GameState->GetServerWorldTimeSeconds();
-		FVector TargetPlace = GetActorLocation();
 		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
+			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+			FVector TargetPlace = GetActorLocation();
 			for (APlayerState* OtherPS : GameState->PlayerArray) {
 				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
 					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
 					if (Distance <= EscapeRange)TargetPlace = OtherPS->GetPawn()->GetActorLocation();
 				}
 			}
+			SetActorLocation(TargetPlace);
+			Cast<AC_PlayerController>(Controller)->Server_ChangeCharacterState(ECharacterStateType::Normal);
+			Cast<AC_PlayerController>(Controller)->Server_EscapeEffect();
 		}
-		SetActorLocation(TargetPlace);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeCharacterState(ECharacterStateType::Normal);
-		Cast<AC_PlayerController>(Controller)->Server_EscapeEffect();
 	}
 }
 
@@ -240,11 +241,11 @@ void AC_Character::Summon(const FInputActionValue& Value)
 {
 }
 
-void AC_Character::Server_ChangeToward_Implementation()
+void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)
 {
-	if(!Toward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
+	if(TargetToward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
 	else Flipbook->SetRelativeRotation(FRotator(180.f, 0.f, -90.f));
-	Toward = !Toward;
+	Toward = TargetToward;
 }
 
 void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)

@@ -99,7 +99,7 @@ public:
 	bool bPreInputLock = true;
 
 	UPROPERTY(BlueprintReadWrite)
-	bool bTryToChangeToward = false;
+	bool bTryTargetToward = false;
 
 	UPROPERTY(EditAnywhere,BlueprintReadWrite)
 	float DamageValue = 0.f;
@@ -152,7 +152,7 @@ protected:
 
 
 	UFUNCTION(Server,Reliable,BlueprintCallable)
-	void Server_ChangeToward();
+	void Server_ChangeToward(bool TargetToward);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void Mult_ChangeBoxSize(FVector Size, int32 Box);
@@ -176,6 +176,4 @@ public:
 
 private:
 	float LastEscapeTime = 0.f;
-
-
 };
