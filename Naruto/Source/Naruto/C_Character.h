@@ -14,14 +14,16 @@ class UPaperSpriteComponent;
 class AC_PlayerState;
 class UBoxComponent;
 enum class ETeamType : uint8;
+enum class ECharacterStateType : uint8;
 struct FInputActionValue;
 
+//攻击类型
 UENUM(BlueprintType)
 enum class EAttackType : uint8
 {
-	Push	UMETA(DisplayName = "Push"),
-	Launch  UMETA(DisplayName = "Launch"),
-	Grab    UMETA(DisplayName = "Grab")
+	Push	UMETA(DisplayName = "Push"),//平推
+	Launch  UMETA(DisplayName = "Launch"),//击飞
+	Grab    UMETA(DisplayName = "Grab")//抓取
 };
 
 UCLASS()
@@ -30,9 +32,10 @@ class NARUTO_API AC_Character : public ACharacter
 	GENERATED_BODY()
 
 public:
-	// Sets default values for this character's properties
+
 	AC_Character();
 
+	//等待PS网络同步后初始化
 	virtual void OnRep_PlayerState() override;
 
 	UFUNCTION()
@@ -52,12 +55,29 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<UPaperSpriteComponent> PlaceMark;
 
+	//角色动画组件
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<UPaperFlipbookComponent> Flipbook;
+
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
+
+	//更改碰撞体
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);
 
+protected:
+	UFUNCTION(NetMulticast, Reliable)
+	void Mult_ChangeBoxSize(FVector Size, int32 Box);
+
+
+
+public:
+	//角色朝向
 	UPROPERTY(Replicated,BlueprintReadWrite)
 	bool Toward = true;
 
+	//输入操作绑定
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* MoveAction;
 
@@ -82,47 +102,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* SummonAction;
 
-	virtual void PossessedBy(AController* NewController)override;
 
+	//复制角色朝向
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	UPROPERTY(EditAnywhere)
-	TObjectPtr<UPaperFlipbookComponent> Flipbook;
-
-	UPROPERTY(BlueprintReadOnly)
-	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
+	
+	//输入控制变量
+	UPROPERTY(BlueprintReadWrite)
+	bool bAttackInputLock = false;//普攻
 
 	UPROPERTY(BlueprintReadWrite)
-	bool bAttackInputLock = false;
+	bool bPreInputLock = true;//预输入
 
 	UPROPERTY(BlueprintReadWrite)
-	bool bPreInputLock = true;
+	bool bTryTargetToward = false;//移动意图
 
-	UPROPERTY(BlueprintReadWrite)
-	bool bTryTargetToward = false;
 
+	//攻击数值
 	UPROPERTY(EditAnywhere,BlueprintReadWrite)
-	float DamageValue = 0.f;
+	float DamageValue = 0.f;//伤害值
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	EAttackType DamageType = EAttackType::Push;
+	EAttackType DamageType = EAttackType::Push;//伤害类型
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FVector DamageEffect = FVector(0,0,0);
+	FVector DamageEffect = FVector(0,0,0);//伤害影响位移
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float EffectTime = 0.f;
+	float EffectTime = 0.f;//伤害影响时间
+
+
+	//替身数值
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float EscapeRange = 0.f;//替身范围
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float EscapeRange = 0.f;
-
+	float EscapeCD = 15.f;//替身CD
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float EscapeCD = 15.f;
+	float EscapeCDState = 0.f;//替身CD状态
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 
-	float EscapeCDState = 0.f;
-
+	//移动范围限制
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector MaxLocation = FVector(800.f,280.f,0.f);
 
@@ -131,9 +152,7 @@ public:
 
 
 protected:
-	// Called when the game starts or when spawned
-	virtual void BeginPlay() override;
-
+	//输入绑定函数
 	void Move(const FInputActionValue& Value);
 
 	void Attack(const FInputActionValue& Value);
@@ -151,12 +170,12 @@ protected:
 	void Summon(const FInputActionValue& Value);
 
 
+	//改变角色朝向
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward(bool TargetToward);
 
-	UFUNCTION(NetMulticast, Reliable)
-	void Mult_ChangeBoxSize(FVector Size, int32 Box);
-
+	
+	//攻击碰撞检测
 	UFUNCTION()
 	void OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent,
 		AActor* OtherActor,
@@ -165,15 +184,34 @@ protected:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
-	int32 LaunchState = 0;
+	
 
 public:	
-	// Called every frame
+	//每帧获取角色信息并处理状态
 	virtual void Tick(float DeltaTime) override;
 
-	// Called to bind functionality to input
+	//获取角色信息
+	UPROPERTY(BlueprintReadOnly)
+	double MySpeed = 0.f;
+	UPROPERTY(BlueprintReadOnly)
+	int32 MyAttack = 0;
+	UPROPERTY(BlueprintReadOnly)
+	ECharacterStateType MyCState;
+	UPROPERTY(BlueprintReadOnly)
+	int32 MySkill = 0;
+
+private:
+	void GetInformation();
+
+public:
+	//输入绑定
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 private:
-	float LastEscapeTime = 0.f;
+
+	//时间戳
+	float LastEscapeTime = 0.f;//替身
+
+	//击飞状态
+	int32 LaunchState = 0;
 };

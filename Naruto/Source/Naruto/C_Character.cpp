@@ -18,12 +18,11 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/GameStateBase.h"
 
-// Sets default values
 AC_Character::AC_Character()
 {
- 	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
+	//碰撞框
 	AttackBox = CreateDefaultSubobject<UBoxComponent>(TEXT("AttackBox"));
 	AttackBox->SetupAttachment(RootComponent);
 	AttackBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -31,8 +30,6 @@ AC_Character::AC_Character()
 	AttackBox->SetCollisionResponseToAllChannels(ECR_Ignore);
 	AttackBox->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Overlap);
 	AttackBox->SetIsReplicated(true);
-
-	AttackBox->OnComponentBeginOverlap.AddDynamic(this, &AC_Character::OnAttackBoxOverlap);
 
 	PlayerBox = CreateDefaultSubobject<UBoxComponent>(TEXT("PlayerBox"));
 	PlayerBox->SetupAttachment(RootComponent);
@@ -42,6 +39,10 @@ AC_Character::AC_Character()
 	PlayerBox->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Overlap);
 	PlayerBox->SetIsReplicated(true);
 
+	//攻击框绑定
+	AttackBox->OnComponentBeginOverlap.AddDynamic(this, &AC_Character::OnAttackBoxOverlap);
+
+	//动画表现
 	PlaceMark = CreateDefaultSubobject<UPaperSpriteComponent>(TEXT("PaperSpriteComponent"));
 	Flipbook = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("FlipbookComponent"));
 	PaperZD = CreateDefaultSubobject<UPaperZDAnimationComponent>(TEXT("PaperZDComponent"));
@@ -59,6 +60,8 @@ AC_Character::AC_Character()
 			PaperZD->InitRenderComponent(Flipbook);
 		}
 	}
+
+	//网络复制
 	bReplicates = true;
 	SetReplicateMovement(true);
 }
@@ -79,6 +82,7 @@ void AC_Character::OnRep_PlayerState()
 
 void AC_Character::OnTeamChanged()
 {
+	//同步队伍信息进行初始化
 	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
 	if (PS && PS->Team != ETeamType::None)
 	{
@@ -88,6 +92,7 @@ void AC_Character::OnTeamChanged()
 
 void AC_Character::MyInitialize(ETeamType team)
 {
+	//根据队伍信息设置朝向和位置标记
 	if (team == ETeamType::Red) {
 		if(Toward)Server_ChangeToward_Implementation(false);
 		PlaceMark->SetSpriteColor(FColor::Red);
@@ -100,10 +105,15 @@ void AC_Character::MyInitialize(ETeamType team)
 
 void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
 {
+	//根据标记确认更改的碰撞框
 	UBoxComponent* TargetBox;
 	if (Box == 0)TargetBox = PlayerBox;
 	else TargetBox = AttackBox;
+
+	//同步更改服务器和客户端的碰撞体大小
 	Mult_ChangeBoxSize(Size, Box);
+
+	//根据朝向设置碰撞体翻转
 	if (!Toward)Offset.X = -Offset.X;
 	TargetBox->SetRelativeLocation(Offset);
 }
@@ -111,33 +121,23 @@ void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset,
 
 void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, int32 Box)
 {
+	//根据标记确认更改的碰撞框
 	UBoxComponent* TargetBox;
 	if (Box == 0)TargetBox = PlayerBox;
 	else TargetBox = AttackBox;
+
+	//根据碰撞体尺寸设置碰撞性
 	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	TargetBox->SetBoxExtent(Size);
-}
 
-void AC_Character::PossessedBy(AController* NewController)
-{
-	Super::PossessedBy(NewController);
-	if (IsLocallyControlled()) {
-		Cast<AC_PlayerController>(NewController)->Server_ChangeCharacterState(ECharacterStateType::Normal);
-	}
+	//更改碰撞体大小
+	TargetBox->SetBoxExtent(Size);
 }
 
 void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AC_Character, Toward);
-}
-
-// Called when the game starts or when spawned
-void AC_Character::BeginPlay()
-{
-	Super::BeginPlay();
-
 }
 
 void AC_Character::Move(const FInputActionValue& Value)
@@ -263,6 +263,11 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 void AC_Character::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	//每帧获取角色信息
+	GetInformation();
+
+
 	if (GetActorLocation().Z > 0) {
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
 	}
@@ -294,10 +299,22 @@ void AC_Character::Tick(float DeltaTime)
 	}
 }
 
+void AC_Character::GetInformation()
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
+	MySpeed = GetVelocity().Length();
+	MyAttack = PS->Attack;
+	MyCState = PS->CharacterState;
+	MySkill = PS->MySkill;
+}
+
 // Called to bind functionality to input
 void AC_Character::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	//输入绑定
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AC_Character::Move);
 		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Triggered, this, &AC_Character::Attack);

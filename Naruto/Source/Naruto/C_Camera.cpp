@@ -5,10 +5,8 @@
 #include "Camera/CameraComponent.h"
 #include "C_Character.h"
 
-// Sets default values
 AC_Camera::AC_Camera()
 {
- 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
     RootComponent = Camera;
@@ -18,12 +16,15 @@ AC_Camera::AC_Camera()
 
 void AC_Camera::Client_Activate_Implementation(APlayerController* TargetPlayer)
 {
-    
     if (TargetPlayer)
     {
         if (!TargetPlayer->IsLocalController())return;
+
+        //设置追踪对象并激活
         AActor* Tracked = TargetPlayer->GetPawn();
         TargetPlayer->SetViewTarget(this);
+
+        //开始追踪
         StartTrack(Tracked);
     }
 }
@@ -47,23 +48,13 @@ void AC_Camera::StartTrack(AActor* Target)
     );
 }
 
-// Called when the game starts or when spawned
-void AC_Camera::BeginPlay()
-{
-	Super::BeginPlay();
-}
-
-// Called every frame
-void AC_Camera::Tick(float DeltaTime)
-{
-	Super::Tick(DeltaTime);
-}
-
 void AC_Camera::UpdateTracking()
 {
     if (!TargetActor)return;
 
     AC_Character* Character = Cast<AC_Character>(TargetActor);
+
+    //根据角色朝向设置视角偏移
     FVector TargetOffset = Offset;
     if (Character)
     {
@@ -72,11 +63,15 @@ void AC_Camera::UpdateTracking()
     }
     FVector TargetLocation = TargetActor->GetActorLocation() + TargetOffset;
 
+
+    //视角范围限定
     if (TargetLocation.X > Max.X)TargetLocation.X = Max.X;
     if (TargetLocation.Y > Max.Y)TargetLocation.Y = Max.Y;
     if (TargetLocation.X < Min.X)TargetLocation.X = Min.X;
     if (TargetLocation.Y < Min.Y)TargetLocation.Y = Min.Y;
 
+
+    //插值更新摄像头位置
     FVector NewLocation = FMath::VInterpTo(
         GetActorLocation(),
         TargetLocation,
