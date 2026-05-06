@@ -106,7 +106,10 @@ public:
 	//复制角色朝向
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	
+	//角色普攻变换
+	UFUNCTION(BlueprintCallable)
+	void ChangeAttack(int32 attack);
+
 	//输入控制变量
 	UPROPERTY(BlueprintReadWrite)
 	bool bAttackInputLock = false;//普攻
@@ -214,4 +217,7 @@ private:
 
 	//击飞状态
 	int32 LaunchState = 0;
+
+	//普攻输入锁解时机控制锁定时器
+	FTimerHandle AttackCheckTimerHandle;
 };

@@ -140,6 +140,35 @@ void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(AC_Character, Toward);
 }
 
+void AC_Character::ChangeAttack(int32 attack)
+{
+	if (attack == 0) {
+		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(0);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(0);
+
+		//定时器控制普攻输入锁解锁时机
+		if (AttackCheckTimerHandle.IsValid())GetWorldTimerManager().ClearTimer(AttackCheckTimerHandle);
+		GetWorldTimerManager().SetTimer(
+			AttackCheckTimerHandle,
+			[this]()
+			{
+				if (GetPlayerState<AC_PlayerState>()->Attack == 0) {
+					bAttackInputLock = false;
+					GetWorldTimerManager().ClearTimer(AttackCheckTimerHandle);
+				}
+			},
+			0.017f,
+			true
+		);
+		return;
+	}
+	if (bPreInputLock) {
+		Server_ChangeToward(bTryTargetToward);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(attack);
+	}
+	else bAttackInputLock = false;
+}
+
 void AC_Character::Move(const FInputActionValue& Value)
 {
 	FVector2D MovementVector = Value.Get<FVector2D>();
