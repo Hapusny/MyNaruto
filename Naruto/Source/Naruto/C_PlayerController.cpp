@@ -32,7 +32,8 @@ void AC_PlayerController::Tick(float DeltaSeconds)
 	
 	if (PlayerWidget && PS1 && PS2 && MyPawn)PlayerWidget->SetUIShow(
 		PS1->HealthValue,PS2->HealthValue,PS1->Chakra,PS2->Chakra,
-		MyPawn->EscapeCDState
+		MyPawn->EscapeCDState,MyPawn->FirstSkillCDState,
+		MyPawn->SecondSkillCDState,MyPawn->ScrollCDState
 	);
 }
 

@@ -62,6 +62,7 @@ public:
 	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
 
+
 	//更改碰撞体
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);
@@ -145,6 +146,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float EscapeCDState = 0.f;//替身CD状态
 
+	//技能数值
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float FirstSkillCD = 10.f;//一技能CD
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float FirstSkillCDState = 0.f;//一技能CD状态
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float SecondSkillCD = 10.f;//二技能CD
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float SecondSkillCDState = 0.f;//二技能CD状态
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float ScrollCD = 10.f;//秘卷CD
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float ScrollCDState = 0.f;//秘卷CD状态
 
 	//移动范围限制
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
@@ -214,6 +233,12 @@ private:
 
 	//时间戳
 	float LastEscapeTime = 0.f;//替身
+
+	float LastFirstSkillTime = 0.f;//一技能
+
+	float LastSecondSkillTime = 0.f;//二技能
+
+	float LastScrollTime = 0.f;//秘卷
 
 	//击飞状态
 	int32 LaunchState = 0;

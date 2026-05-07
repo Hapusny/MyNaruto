@@ -12,7 +12,7 @@ void UC_PlayerWidget::SetTime(int time)
 	TimeText->SetText(FText::FromString(FString::FromInt(time)));
 }
 
-void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int player1Chakra, int player2Chakra, float escapeCD, float skill1CD, float skill2CD, float skill3CD, float scrollCD, float summonCD)
+void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int player1Chakra, int player2Chakra, float escapeCD, float skill1CD, float skill2CD, float scrollCD)
 {
 	Player1Health->SetText(FText::FromString(FString::FromInt(player1Health)));
 	Player2Health->SetText(FText::FromString(FString::FromInt(player2Health)));
@@ -23,9 +23,9 @@ void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int pl
 	SetIconShow(Escape, EscapeCD, escapeCD);
 	SetIconShow(FirstSkill, FirstSkillCD, skill1CD);
 	SetIconShow(SecondSkill, SecondSkillCD, skill2CD);
-	SetIconShow(FinalSkill, FinalSkillCD, skill3CD);
+	SetIconShow(FinalSkill, FinalSkillCD, 0);
 	SetIconShow(Scroll, ScrollCD, scrollCD);
-	SetIconShow(Summon, SummonCD, summonCD);
+	SetIconShow(Summon, SummonCD, 0);
 }
 
 void UC_PlayerWidget::SetIconShow(TObjectPtr<UImage>& image, TObjectPtr<UTextBlock>& cdText, float cd)

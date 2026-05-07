@@ -221,7 +221,7 @@ void AC_Character::Escape(const FInputActionValue& Value)
 	if (!GameState)return;
 	if (!PS)return;
 	if (PS->Chakra == 0)return;
-	if (LastEscapeTime == 0.f || GameState->GetServerWorldTimeSeconds() - LastEscapeTime >= EscapeCD) {
+	if (EscapeCDState == 0.f) {
 		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
 			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
 			FVector TargetPlace = GetActorLocation();
@@ -240,21 +240,27 @@ void AC_Character::Escape(const FInputActionValue& Value)
 
 void AC_Character::FirstSkill(const FInputActionValue& Value)
 {
+	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS) {
-		if (IsLocallyControlled()) {
-			Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
-		}
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!PS)return;
+	if (!GameState)return;
+	if (FirstSkillCDState == 0.f) {
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
+		LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
 	}
 }
 
 void AC_Character::SecondSkill(const FInputActionValue& Value)
 {
+	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS) {
-		if (IsLocallyControlled()) {
-			Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
-		}
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!PS)return;
+	if (!GameState)return;
+	if (SecondSkillCDState == 0.f) {
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
+		LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
 	}
 }
 
@@ -296,14 +302,18 @@ void AC_Character::Tick(float DeltaTime)
 	//每帧获取角色信息
 	GetInformation();
 
-
+	//根据角色高度同步动画高度
 	if (GetActorLocation().Z > 0) {
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
 	}
+
+	//角色移动范围限制
 	if (GetActorLocation().X > MaxLocation.X)SetActorLocation(FVector(MaxLocation.X, GetActorLocation().Y, GetActorLocation().Z));
 	if (GetActorLocation().Y > MaxLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MaxLocation.Y, GetActorLocation().Z));
 	if (GetActorLocation().X < MinLocation.X)SetActorLocation(FVector(MinLocation.X, GetActorLocation().Y, GetActorLocation().Z));
 	if (GetActorLocation().Y < MinLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MinLocation.Y, GetActorLocation().Z));
+
+	//受击处理
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
 	if (PS->CharacterState == ECharacterStateType::Launched) {
@@ -319,13 +329,36 @@ void AC_Character::Tick(float DeltaTime)
 	else {
 		GetCharacterMovement()->GravityScale = 1.f;
 	}
+
+	//CD处理
+	//替身
 	if (LastEscapeTime != 0.f) {
 		EscapeCDState = EscapeCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime);
 		if (EscapeCDState <= 0.f)EscapeCDState = 0.f;
 	}
-	else {
-		EscapeCDState = 0.f;
+	else EscapeCDState = 0.f;
+
+	//一技能
+	if (LastFirstSkillTime != 0.f) {
+		FirstSkillCDState = FirstSkillCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastFirstSkillTime);
+		if (FirstSkillCDState <= 0.f)FirstSkillCDState = 0.f;
 	}
+	else FirstSkillCDState = 0.f;
+
+
+	//二技能
+	if (LastSecondSkillTime != 0.f) {
+		SecondSkillCDState = SecondSkillCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastSecondSkillTime);
+		if (SecondSkillCDState <= 0.f)SecondSkillCDState = 0.f;
+	}
+	else SecondSkillCDState = 0.f;
+
+	//秘卷
+	if (LastScrollTime != 0.f) {
+		ScrollCDState = ScrollCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastScrollTime);
+		if (ScrollCDState <= 0.f)ScrollCDState = 0.f;
+	}
+	else ScrollCDState = 0.f;
 }
 
 void AC_Character::GetInformation()
