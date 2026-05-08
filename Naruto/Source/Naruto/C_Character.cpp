@@ -163,7 +163,8 @@ void AC_Character::ChangeAttack(int32 attack)
 		return;
 	}
 	if (bPreInputLock) {
-		Server_ChangeToward(bTryTargetToward);
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(attack);
 	}
 	else bAttackInputLock = false;
@@ -185,17 +186,23 @@ void AC_Character::Move(const FInputActionValue& Value)
 		// get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		if (MovementVector.Y > 0)bTryTargetToward = true;
-		if (MovementVector.Y < 0)bTryTargetToward = false;
+		//获取移动意图
+		TryTargetToward.X = MovementVector.Y;
+		TryTargetToward.Y = MovementVector.X;
 
 		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-		if (PS && PS->Attack == 0  && PS->CharacterState != ECharacterStateType::Staggered && PS->CharacterState != ECharacterStateType::Launched) {
-			if (MovementVector.Y > 0 && !Toward)Server_ChangeToward(true);
-			if (MovementVector.Y < 0 && Toward)Server_ChangeToward(false);
-			// add movement 
-			AddMovementInput(ForwardDirection, MovementVector.Y);
-			AddMovementInput(RightDirection, MovementVector.X);
-		}
+		if(!PS)return;
+
+		//移动可行性判断
+		if(PS->Attack != 0 || PS->MySkill != 0)return;
+		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched)return;
+
+		//转向处理
+		if (MovementVector.Y > 0 && !Toward)Server_ChangeToward(true);
+		if (MovementVector.Y < 0 && Toward)Server_ChangeToward(false);
+		// add movement 
+		AddMovementInput(ForwardDirection, MovementVector.Y);
+		AddMovementInput(RightDirection, MovementVector.X);
 	}
 }
 
@@ -205,7 +212,8 @@ void AC_Character::Attack(const FInputActionValue& Value)
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (PS && bAttackInputLock == false) {
 		if (IsLocallyControlled()) {
-			Server_ChangeToward(bTryTargetToward);
+			if(TryTargetToward.X > 0)Server_ChangeToward(true);
+			if(TryTargetToward.X < 0)Server_ChangeToward(false);
 			bAttackInputLock = true;
 			int TargetAttack = PS->Attack + 1;
 			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
@@ -248,6 +256,7 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	if (FirstSkillCDState == 0.f) {
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
 		LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
+		BP_FirstSkillEffect();
 	}
 }
 
@@ -261,6 +270,7 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	if (SecondSkillCDState == 0.f) {
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
 		LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
+		BP_SecondSkillEffect();
 	}
 }
 

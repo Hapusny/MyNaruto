@@ -103,6 +103,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* SummonAction;
 
+	UFUNCTION(BlueprintImplementableEvent)
+	void BP_FirstSkillEffect();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void BP_SecondSkillEffect();
+
+
 
 	//复制角色朝向
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -119,7 +126,7 @@ public:
 	bool bPreInputLock = true;//预输入
 
 	UPROPERTY(BlueprintReadWrite)
-	bool bTryTargetToward = false;//移动意图
+	FVector2D TryTargetToward = FVector2D(0.f,0.f);//移动意图
 
 
 	//攻击数值
