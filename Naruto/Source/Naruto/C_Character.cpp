@@ -254,6 +254,8 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	if (!PS)return;
 	if (!GameState)return;
 	if (FirstSkillCDState == 0.f) {
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
 		LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
 		BP_FirstSkillEffect();
@@ -268,6 +270,8 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	if (!PS)return;
 	if (!GameState)return;
 	if (SecondSkillCDState == 0.f) {
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
 		LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
 		BP_SecondSkillEffect();
