@@ -60,7 +60,7 @@ public:
 	void Server_EscapeEffect();
 
 	//½ÇÉ«ÊÜ»÷
-	UFUNCTION()
+	UFUNCTION(BlueprintCallable)
 	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
 
 protected:

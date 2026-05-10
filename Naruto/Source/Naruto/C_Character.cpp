@@ -103,6 +103,12 @@ void AC_Character::MyInitialize(ETeamType team)
 	}
 }
 
+void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, float Time)
+{
+	//在PC中处理受击
+	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
+}
+
 void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
 {
 	//根据标记确认更改的碰撞框
@@ -195,7 +201,9 @@ void AC_Character::Move(const FInputActionValue& Value)
 
 		//移动可行性判断
 		if(PS->Attack != 0 || PS->MySkill != 0)return;
-		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched)return;
+		if (PS->CharacterState == ECharacterStateType::Staggered)return;
+		if (PS->CharacterState == ECharacterStateType::Launched)return;
+		if (PS->CharacterState == ECharacterStateType::Grabbed)return;
 
 		//转向处理
 		if (MovementVector.Y > 0 && !Toward)Server_ChangeToward(true);
@@ -304,7 +312,9 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 		FVector Effect = DamageEffect;
 		if (Toward == false)Effect.X = -Effect.X;
 		if (DamageType == EAttackType::Grab)Effect = Effect + GetActorLocation();
-		Cast<AC_PlayerController>(Cast<AC_Character>(OtherActor)->Controller)->PlayerGetDamage(DamageValue,DamageType,Effect,EffectTime);
+
+		//被攻击的对象受到伤害
+		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageType, Effect, EffectTime);
 	}
 }
 

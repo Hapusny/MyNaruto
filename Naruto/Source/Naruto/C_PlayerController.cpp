@@ -8,6 +8,7 @@
 #include "C_PlayerState.h"
 #include "C_Character.h"
 #include "GameFramework/GameStateBase.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 void AC_PlayerController::BeginPlay()
 {
@@ -56,6 +57,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, 
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
 			TargetType = ECharacterStateType::Launched;
 			GetPawn()->SetActorLocation(Effect);
+			Cast<ACharacter>(GetPawn())->GetCharacterMovement()->StopMovementImmediately();
 		}
 		GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 		GetWorldTimerManager().SetTimer(

@@ -63,6 +63,12 @@ public:
 	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
 
 
+	//角色受到伤害
+	UFUNCTION(BlueprintCallable)
+
+	void BeDameged(float Damage, EAttackType Type, FVector Effect, float Time);
+
+
 	//更改碰撞体
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);
