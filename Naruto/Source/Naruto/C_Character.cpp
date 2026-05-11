@@ -109,6 +109,13 @@ void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, flo
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
 }
 
+void AC_Character::AddChakra()
+{
+	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
+	if (!PS)return;
+	if (PS->Chakra < 4)Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra + 1);
+}
+
 void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
 {
 	//根据标记确认更改的碰撞框
@@ -288,14 +295,28 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 
 void AC_Character::FinalSkill(const FInputActionValue& Value)
 {
+	if (!IsLocallyControlled())return;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!PS)return;
+	if (!GameState)return;
+	if (PS->Chakra == 4) {
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(3);
+		BP_FinalSkillEffect();
+	}
 }
 
 void AC_Character::Scroll(const FInputActionValue& Value)
 {
+	
 }
 
 void AC_Character::Summon(const FInputActionValue& Value)
 {
+	
 }
 
 void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)

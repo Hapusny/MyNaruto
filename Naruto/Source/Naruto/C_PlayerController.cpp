@@ -38,6 +38,14 @@ void AC_PlayerController::Tick(float DeltaSeconds)
 	);
 }
 
+void AC_PlayerController::Server_ChangeChakra_Implementation(int TargetChakra)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS) {
+		PS->Chakra = TargetChakra;
+	}
+}
+
 void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, FVector Effect, float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);

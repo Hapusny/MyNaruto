@@ -54,6 +54,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeSkillState(int TargetSkill);
 
+	UFUNCTION(Server, Reliable)
+	void Server_ChangeChakra(int TargetChakra);
+
 
 	//ÌæÉíĞ§¹û
 	UFUNCTION(Server, Reliable)

@@ -84,6 +84,10 @@ public:
 	UPROPERTY(Replicated,BlueprintReadWrite)
 	bool Toward = true;
 
+	//角色查克拉增加
+	UFUNCTION(BlueprintCallable)
+	void AddChakra();
+
 	//输入操作绑定
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
 	UInputAction* MoveAction;
@@ -114,6 +118,15 @@ public:
 
 	UFUNCTION(BlueprintImplementableEvent)
 	void BP_SecondSkillEffect();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void BP_FinalSkillEffect();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void BP_ScrollEffect();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void BP_SummonEffect();
 
 
 
