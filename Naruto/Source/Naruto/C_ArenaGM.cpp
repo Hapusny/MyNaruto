@@ -44,6 +44,29 @@ void AC_ArenaGM::HandleSeamlessTravelPlayer(AController*& C)
     }
 }
 
+void AC_ArenaGM::GameTerminate()
+{
+    if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue > Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
+        if (Player1->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Blue Win!"));
+        }
+        else {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Rad Win!"));
+        }
+    }
+    else if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue < Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
+        if (Player2->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Blue Win!"));
+        }
+        else {
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Rad Win!"));
+        }
+    }
+    else GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("No Winner!"));
+
+    MyGameState->FightStartTime = 0.f;
+}
+
 void AC_ArenaGM::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
@@ -54,6 +77,9 @@ void AC_ArenaGM::Tick(float DeltaSeconds)
             //更新时间展示
             Player1->Client_SetWidgetTime(ClockTime);
             Player2->Client_SetWidgetTime(ClockTime);
+        }
+        if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue <= 0.f || Player2->GetPlayerState<AC_PlayerState>()->HealthValue <= 0.f || ClockTime <= 0.f) {
+            GameTerminate();
         }
     }
 }

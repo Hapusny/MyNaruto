@@ -40,6 +40,9 @@ public:
 	UPROPERTY(EditAnywhere)
 	float GameFightTime = 60.f;
 
+	UFUNCTION()
+	void GameTerminate();
+
 	
 
 protected:
