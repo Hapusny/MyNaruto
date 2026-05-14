@@ -147,6 +147,10 @@ public:
 	UPROPERTY(BlueprintReadWrite)
 	FVector2D TryTargetToward = FVector2D(0.f,0.f);//移动意图
 
+	//命中判断
+	UPROPERTY(BlueprintReadWrite)
+	bool bSuccessHit = false;
+
 
 	//攻击数值
 	UPROPERTY(EditAnywhere,BlueprintReadWrite)

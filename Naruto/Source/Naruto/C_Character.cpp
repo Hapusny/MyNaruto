@@ -334,6 +334,9 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 		if (Toward == false)Effect.X = -Effect.X;
 		if (DamageType == EAttackType::Grab)Effect = Effect + GetActorLocation();
 
+		//成功命中
+		bSuccessHit = true;
+
 		//被攻击的对象受到伤害
 		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageType, Effect, EffectTime);
 	}
