@@ -13,6 +13,7 @@ class UPaperZDAnimationComponent;
 class UPaperSpriteComponent;
 class AC_PlayerState;
 class UBoxComponent;
+class AC_GrabPoinnt;
 enum class ETeamType : uint8;
 enum class ECharacterStateType : uint8;
 struct FInputActionValue;
@@ -66,7 +67,7 @@ public:
 	//角色受到伤害
 	UFUNCTION(BlueprintCallable)
 
-	void BeDameged(float Damage, EAttackType Type, FVector Effect, float Time);
+	void BeDameged(float Damage, EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint);
 
 
 	//更改碰撞体
@@ -87,6 +88,16 @@ public:
 	//角色查克拉增加
 	UFUNCTION(BlueprintCallable)
 	void AddChakra();
+
+	//抓取点绑定
+	UPROPERTY(EditAnywhere,BlueprintReadWrite)
+	TObjectPtr<AC_GrabPoinnt> MyGrabPoint;
+
+private:
+	//被抓点绑定
+	TObjectPtr<AC_GrabPoinnt> BeGrabbedPoint;
+
+public:
 
 	//输入操作绑定
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
@@ -241,6 +252,14 @@ protected:
 public:	
 	//每帧获取角色信息并处理状态
 	virtual void Tick(float DeltaTime) override;
+
+	//同步改变角色被抓取位置
+	UFUNCTION(NetMulticast,Reliable)
+	void Mult_ChangeGrabLocation(FVector target);
+
+	//同步改变角色重力
+	UFUNCTION(NetMulticast, Reliable)
+	void Mult_ChangeGravity(bool able);
 
 	//获取角色信息
 	UPROPERTY(BlueprintReadOnly)

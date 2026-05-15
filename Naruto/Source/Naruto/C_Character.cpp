@@ -17,6 +17,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/GameStateBase.h"
+#include "C_GrabPoinnt.h"
 
 AC_Character::AC_Character()
 {
@@ -103,8 +104,11 @@ void AC_Character::MyInitialize(ETeamType team)
 	}
 }
 
-void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, float Time)
+void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint)
 {
+	//抓取点绑定
+	if (Type == EAttackType::Grab)BeGrabbedPoint = GrabPoint;
+
 	//在PC中处理受击
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
 }
@@ -332,13 +336,12 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 	if (HasAuthority()) {
 		FVector Effect = DamageEffect;
 		if (Toward == false)Effect.X = -Effect.X;
-		if (DamageType == EAttackType::Grab)Effect = Effect + GetActorLocation();
 
 		//成功命中
 		bSuccessHit = true;
 
 		//被攻击的对象受到伤害
-		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageType, Effect, EffectTime);
+		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageType, Effect, EffectTime,MyGrabPoint);
 	}
 }
 
@@ -364,18 +367,24 @@ void AC_Character::Tick(float DeltaTime)
 	//受击处理
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
-	if (PS->CharacterState == ECharacterStateType::Launched) {
-		if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
-		if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
-			PS->CharacterState = ECharacterStateType::Normal;
-			LaunchState = 0;
+	if (HasAuthority()) {//服务器控制
+		if (!PS)return;
+		if (PS->CharacterState == ECharacterStateType::Launched) {
+			if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
+			if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
+				PS->CharacterState = ECharacterStateType::Normal;
+				LaunchState = 0;
+			}
 		}
-	}
-	if (PS->CharacterState == ECharacterStateType::Grabbed) {
-		GetCharacterMovement()->GravityScale = 0.f;
-	}
-	else {
-		GetCharacterMovement()->GravityScale = 1.f;
+		if (PS->CharacterState == ECharacterStateType::Grabbed) {
+			if (BeGrabbedPoint && BeGrabbedPoint->bIsUsing) {
+				Mult_ChangeGrabLocation(BeGrabbedPoint->GetActorLocation());
+			}
+			else {
+				PS->CharacterState = ECharacterStateType::Launched;
+				Mult_ChangeGravity(true);
+			}
+		}
 	}
 
 	//CD处理
@@ -407,6 +416,21 @@ void AC_Character::Tick(float DeltaTime)
 		if (ScrollCDState <= 0.f)ScrollCDState = 0.f;
 	}
 	else ScrollCDState = 0.f;
+}
+
+void AC_Character::Mult_ChangeGravity_Implementation(bool able)
+{
+	if (able) {
+		GetCharacterMovement()->GravityScale = 1.f;
+		return;
+	}
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->GravityScale = 0.f;
+}
+
+void AC_Character::Mult_ChangeGrabLocation_Implementation(FVector target)
+{
+	SetActorLocation(target);
 }
 
 void AC_Character::GetInformation()
