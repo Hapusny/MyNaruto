@@ -108,6 +108,7 @@ void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, flo
 {
 	//抓取点绑定
 	if (Type == EAttackType::Grab)BeGrabbedPoint = GrabPoint;
+	else BeGrabbedPoint = nullptr;
 
 	//在PC中处理受击
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
@@ -159,10 +160,10 @@ void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 
 void AC_Character::ChangeAttack(int32 attack)
 {
+	
 	if (attack == 0) {
 		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(0);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(0);
-
 		//定时器控制普攻输入锁解锁时机
 		if (AttackCheckTimerHandle.IsValid())GetWorldTimerManager().ClearTimer(AttackCheckTimerHandle);
 		GetWorldTimerManager().SetTimer(
