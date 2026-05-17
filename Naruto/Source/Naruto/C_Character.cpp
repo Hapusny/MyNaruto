@@ -160,32 +160,24 @@ void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 
 void AC_Character::ChangeAttack(int32 attack)
 {
-	
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (attack == 0) {
-		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(0);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(0);
-		//定时器控制普攻输入锁解锁时机
-		if (AttackCheckTimerHandle.IsValid())GetWorldTimerManager().ClearTimer(AttackCheckTimerHandle);
-		GetWorldTimerManager().SetTimer(
-			AttackCheckTimerHandle,
-			[this]()
-			{
-				if (GetPlayerState<AC_PlayerState>()->Attack == 0) {
-					bAttackInputLock = false;
-					GetWorldTimerManager().ClearTimer(AttackCheckTimerHandle);
-				}
-			},
-			0.017f,
-			true
-		);
+		PS->Attack = 0;
+		PS->MySkill = 0;
+		bAttackInputLock = false;
 		return;
 	}
 	if (bPreInputLock) {
-		if (TryTargetToward.X > 0)Server_ChangeToward(true);
-		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(attack);
+		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
+		PS->Attack = attack;
 	}
 	else bAttackInputLock = false;
+}
+
+void AC_Character::Server_SetTryTargetToward_Implementation(FVector2D TargetToward)
+{
+	TryTargetToward = TargetToward;
 }
 
 void AC_Character::Move(const FInputActionValue& Value)
@@ -207,6 +199,7 @@ void AC_Character::Move(const FInputActionValue& Value)
 		//获取移动意图
 		TryTargetToward.X = MovementVector.Y;
 		TryTargetToward.Y = MovementVector.X;
+		Server_SetTryTargetToward(TryTargetToward);
 
 		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 		if(!PS)return;
@@ -228,17 +221,7 @@ void AC_Character::Move(const FInputActionValue& Value)
 
 void AC_Character::Attack(const FInputActionValue& Value)
 {
-	bPreInputLock = true;
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS && bAttackInputLock == false) {
-		if (IsLocallyControlled()) {
-			if(TryTargetToward.X > 0)Server_ChangeToward(true);
-			if(TryTargetToward.X < 0)Server_ChangeToward(false);
-			bAttackInputLock = true;
-			int TargetAttack = PS->Attack + 1;
-			Cast<AC_PlayerController>(Controller)->Server_ChangeAttackState(TargetAttack);
-		}
-	}
+	Server_Attack();
 }
 
 void AC_Character::Escape(const FInputActionValue& Value)
@@ -322,6 +305,18 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 void AC_Character::Summon(const FInputActionValue& Value)
 {
 	
+}
+
+void AC_Character::Server_Attack_Implementation()
+{
+	bPreInputLock = true;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS && bAttackInputLock == false) {
+		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
+		bAttackInputLock = true;
+		PS->Attack = PS->Attack + 1;
+	}
 }
 
 void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)

@@ -150,13 +150,17 @@ public:
 
 	//输入控制变量
 	UPROPERTY(BlueprintReadWrite)
-	bool bAttackInputLock = false;//普攻
+	bool bAttackInputLock = false;//普攻输入锁
 
 	UPROPERTY(BlueprintReadWrite)
 	bool bPreInputLock = true;//预输入
 
 	UPROPERTY(BlueprintReadWrite)
 	FVector2D TryTargetToward = FVector2D(0.f,0.f);//移动意图
+
+	//设置移动意图
+	UFUNCTION(Server,Reliable)
+	void Server_SetTryTargetToward(FVector2D TargetToward);
 
 	//命中判断
 	UPROPERTY(BlueprintReadWrite)
@@ -232,6 +236,9 @@ protected:
 
 	void Summon(const FInputActionValue& Value);
 
+
+	UFUNCTION(Server, Reliable)
+	void Server_Attack();
 
 	//改变角色朝向
 	UFUNCTION(Server,Reliable,BlueprintCallable)
