@@ -108,7 +108,6 @@ void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, flo
 {
 	//抓取点绑定
 	if (Type == EAttackType::Grab)BeGrabbedPoint = GrabPoint;
-	else BeGrabbedPoint = nullptr;
 
 	//在PC中处理受击
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
@@ -164,6 +163,8 @@ void AC_Character::ChangeAttack(int32 attack)
 	if (attack == 0) {
 		PS->Attack = 0;
 		PS->MySkill = 0;
+		MyAttack = 0;
+		MySkill = 0;
 		bAttackInputLock = false;
 		return;
 	}
@@ -171,8 +172,27 @@ void AC_Character::ChangeAttack(int32 attack)
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
 		PS->Attack = attack;
+		MyAttack = attack;
 	}
 	else bAttackInputLock = false;
+}
+
+void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
+{
+	//根据意图改变方向
+	FVector MyOffset = Offset;
+	if (TargetToward.Y == 0.f)MyOffset.Y = 0;
+	else if (TargetToward.Y < 0.f)MyOffset.Y = -MyOffset.Y;
+	if (!Toward)MyOffset.X = -MyOffset.X;
+
+	//位置限制
+	FVector MyLocation = GetActorLocation();
+	if (MyLocation.X + MyOffset.X > MaxLocation.X)MyOffset.X = MaxLocation.X - MyLocation.X;
+	if (MyLocation.X + MyOffset.X < MinLocation.X)MyOffset.X = MinLocation.X - MyLocation.X;
+	if (MyLocation.Y + MyOffset.Y > MaxLocation.Y)MyOffset.Y = MaxLocation.Y - MyLocation.Y;
+	if (MyLocation.Y + MyOffset.Y < MinLocation.Y)MyOffset.Y = MinLocation.Y - MyLocation.Y;
+
+	AddActorLocalOffset(MyOffset);
 }
 
 void AC_Character::Server_SetTryTargetToward_Implementation(FVector2D TargetToward)
@@ -316,6 +336,7 @@ void AC_Character::Server_Attack_Implementation()
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
 		bAttackInputLock = true;
 		PS->Attack = PS->Attack + 1;
+		MyAttack = PS->Attack;
 	}
 }
 

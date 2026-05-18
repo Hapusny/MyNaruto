@@ -50,31 +50,37 @@ void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, 
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	GetPlayerState<AC_PlayerState>()->Attack = 0;
+	if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Grabbed)return;
 	if (AttackType == EAttackType::Launch) {
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect, true, true);
 	}
-	else {
-		ECharacterStateType TargetType;
-		if (AttackType == EAttackType::Push) {
+	else if (AttackType == EAttackType::Push) {
+		if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Normal) {
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
-			TargetType = ECharacterStateType::Normal;
 			GetPawn()->AddActorLocalOffset(Effect);
 			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 			GetWorldTimerManager().SetTimer(
 				BeAttackedTimerHandle,
-				[this, TargetType]()
+				[this]()
 				{
-					GetPlayerState<AC_PlayerState>()->CharacterState = TargetType;
+					GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Normal;
 				},
 				EffectTime,
 				false
 			);
 		}
-		else {
-			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
-			GetPawn<AC_Character>()->Mult_ChangeGravity(false);
+		else if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Launched) {
+			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
+			FVector NewEffect = Effect;
+			NewEffect.Z = fabs(Effect.X * 30);
+			NewEffect.X = 0;
+			Cast<AC_Character>(GetPawn())->LaunchCharacter(NewEffect, true, true);
 		}
+	}
+	else {
+		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
+		GetPawn<AC_Character>()->Mult_ChangeGravity(false);
 	}
 }
 

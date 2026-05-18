@@ -148,6 +148,10 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void ChangeAttack(int32 attack);
 
+	//角色位移
+	UFUNCTION(BlueprintCallable)
+	void MakeMove(FVector Offset,FVector2D TargetToward);
+
 	//输入控制变量
 	UPROPERTY(BlueprintReadWrite)
 	bool bAttackInputLock = false;//普攻输入锁
