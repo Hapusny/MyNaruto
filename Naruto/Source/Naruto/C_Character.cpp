@@ -151,6 +151,11 @@ void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, int32 Box)
 	TargetBox->SetBoxExtent(Size);
 }
 
+void AC_Character::Server_SetSummonIndex_Implementation(int32 target)
+{
+	SummonIndex = target;
+}
+
 void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -310,7 +315,7 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5);
 		BP_FinalSkillEffect();
 	}
 }
@@ -325,9 +330,9 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 	if (ScrollCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		Server_SetSummonIndex(0);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
 		LastScrollTime = GameState->GetServerWorldTimeSeconds();
-		SummonIndex = 1;
 	}
 }
 
@@ -341,9 +346,9 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	if (SummonCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		Server_SetSummonIndex(1);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
 		LastSummonTime = GameState->GetServerWorldTimeSeconds();
-		SummonIndex = 2;
 	}
 }
 

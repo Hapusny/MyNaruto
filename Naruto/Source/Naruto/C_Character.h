@@ -136,6 +136,9 @@ public:
 	UFUNCTION(BlueprintImplementableEvent)
 	void BP_SummonEffect();
 
+	UFUNCTION(Server,Reliable)
+	void Server_SetSummonIndex(int32 target);
+
 	UPROPERTY(BlueprintReadWrite)
 
 	int32 SummonIndex = 0;
