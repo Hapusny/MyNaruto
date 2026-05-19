@@ -134,12 +134,11 @@ public:
 	void BP_FinalSkillEffect();
 
 	UFUNCTION(BlueprintImplementableEvent)
-	void BP_ScrollEffect();
-
-	UFUNCTION(BlueprintImplementableEvent)
 	void BP_SummonEffect();
 
+	UPROPERTY(BlueprintReadWrite)
 
+	int32 SummonIndex = 0;
 
 	//复制角色朝向
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -213,6 +212,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float ScrollCDState = 0.f;//秘卷CD状态
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float SummonCD = 60.f;//通灵CD
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float SummonCDState = 0.f;//通灵CD状态
 
 	//移动范围限制
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
@@ -299,6 +304,8 @@ private:
 	float LastSecondSkillTime = 0.f;//二技能
 
 	float LastScrollTime = 0.f;//秘卷
+
+	float LastSummonTime = 0.f;//通灵
 
 	//击飞状态
 	int32 LaunchState = 0;

@@ -305,26 +305,46 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 {
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
-	if (!GameState)return;
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(3);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
 		BP_FinalSkillEffect();
 	}
 }
 
 void AC_Character::Scroll(const FInputActionValue& Value)
 {
-	
+	if (!IsLocallyControlled())return;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!PS)return;
+	if (!GameState)return;
+	if (ScrollCDState == 0.f) {
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
+		LastScrollTime = GameState->GetServerWorldTimeSeconds();
+		SummonIndex = 1;
+	}
 }
 
 void AC_Character::Summon(const FInputActionValue& Value)
 {
-	
+	if (!IsLocallyControlled())return;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!PS)return;
+	if (!GameState)return;
+	if (SummonCDState == 0.f) {
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
+		LastSummonTime = GameState->GetServerWorldTimeSeconds();
+		SummonIndex = 2;
+	}
 }
 
 void AC_Character::Server_Attack_Implementation()
@@ -433,6 +453,13 @@ void AC_Character::Tick(float DeltaTime)
 		if (ScrollCDState <= 0.f)ScrollCDState = 0.f;
 	}
 	else ScrollCDState = 0.f;
+
+	//Í¨Áé
+	if (LastSummonTime != 0.f) {
+		SummonCDState = SummonCD - (GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastSummonTime);
+		if (SummonCDState <= 0.f)SummonCDState = 0.f;
+	}
+	else SummonCDState = 0.f;
 }
 
 void AC_Character::Mult_ChangeGravity_Implementation(bool able)
