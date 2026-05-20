@@ -38,7 +38,8 @@ enum class ECharacterStateType : uint8
     Staggered       UMETA(DisplayName = "Staggered"),
     Launched        UMETA(DisplayName = "Launched"),
     Downed          UMETA(DisplayName = "Downed"),
-    Grabbed         UMETA(DisplayName = "Grabbed")
+    Grabbed         UMETA(DisplayName = "Grabbed"),
+    Protected       UMETA(DisplayName = "Protected")
 };
 /**
  * 
@@ -68,7 +69,7 @@ public:
 
     //½ÇÉ«ÊýÖµ
     UPROPERTY(Replicated, BlueprintReadWrite)
-    float HealthValue = 100.f;
+    float HealthValue = 1000.f;
 
     UPROPERTY(Replicated, BlueprintReadWrite)
     int32 Chakra = 2;

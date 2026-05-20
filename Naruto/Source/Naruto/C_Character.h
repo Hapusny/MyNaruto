@@ -15,8 +15,8 @@ class AC_PlayerState;
 class UBoxComponent;
 class AC_GrabPoinnt;
 enum class ETeamType : uint8;
-enum class ECharacterStateType : uint8;
 struct FInputActionValue;
+enum class ECharacterStateType : uint8;
 
 //攻击类型
 UENUM(BlueprintType)
@@ -67,7 +67,7 @@ public:
 	//角色受到伤害
 	UFUNCTION(BlueprintCallable)
 
-	void BeDameged(float Damage, EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint);
+	void BeDameged(float Damage, ECharacterStateType State,EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint);
 
 
 	//更改碰撞体
@@ -150,6 +150,10 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void ChangeAttack(int32 attack);
 
+	//角色状态变换
+	UFUNCTION(BlueprintCallable)
+	void ChangeState(ECharacterStateType target);
+
 	//角色位移
 	UFUNCTION(BlueprintCallable)
 	void MakeMove(FVector Offset,FVector2D TargetToward);
@@ -178,6 +182,9 @@ public:
 	float DamageValue = 0.f;//伤害值
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	ECharacterStateType DamageState;//伤害状态
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	EAttackType DamageType = EAttackType::Push;//伤害类型
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
@@ -189,7 +196,7 @@ public:
 
 	//替身数值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float EscapeRange = 0.f;//替身范围
+	float EscapeRange = 100.f;//替身范围
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float EscapeCD = 15.f;//替身CD
@@ -252,6 +259,9 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void Server_Attack();
 
+	UFUNCTION(Server, Reliable)
+	void Server_Escape();
+
 	//改变角色朝向
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward(bool TargetToward);
@@ -271,6 +281,10 @@ protected:
 public:	
 	//每帧获取角色信息并处理状态
 	virtual void Tick(float DeltaTime) override;
+
+	//同步改变角色保护动画
+	UFUNCTION(NetMulticast, Reliable)
+	void Mult_ChangeProtectedAnim(bool show);
 
 	//同步改变角色被抓取位置
 	UFUNCTION(NetMulticast,Reliable)
@@ -300,6 +314,7 @@ public:
 private:
 
 	//时间戳
+	UPROPERTY(Replicated)
 	float LastEscapeTime = 0.f;//替身
 
 	float LastFirstSkillTime = 0.f;//一技能
@@ -313,6 +328,6 @@ private:
 	//击飞状态
 	int32 LaunchState = 0;
 
-	//普攻输入锁解时机控制锁定时器
-	FTimerHandle AttackCheckTimerHandle;
+	//保护状态动画显示
+	bool bIsProtectedShow = false;
 };

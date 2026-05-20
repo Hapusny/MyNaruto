@@ -104,13 +104,15 @@ void AC_Character::MyInitialize(ETeamType team)
 	}
 }
 
-void AC_Character::BeDameged(float Damage, EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint)
+void AC_Character::BeDameged(float Damage, ECharacterStateType State, EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint)
 {
 	//抓取点绑定
-	if (Type == EAttackType::Grab)BeGrabbedPoint = GrabPoint;
+	if (Type == EAttackType::Grab) {
+		if(!BeGrabbedPoint || BeGrabbedPoint->bIsUsing == false) BeGrabbedPoint = GrabPoint;
+	}
 
 	//在PC中处理受击
-	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, Type, Effect, Time);
+	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, State,Type, Effect, Time);
 }
 
 void AC_Character::AddChakra()
@@ -124,7 +126,11 @@ void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset,
 {
 	//根据标记确认更改的碰撞框
 	UBoxComponent* TargetBox;
-	if (Box == 0)TargetBox = PlayerBox;
+	if (Box == 0) {
+		//保护状态受击框保持为无碰撞
+		if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Protected)return;
+		TargetBox = PlayerBox;
+	}
 	else TargetBox = AttackBox;
 
 	//同步更改服务器和客户端的碰撞体大小
@@ -160,6 +166,7 @@ void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AC_Character, Toward);
+	DOREPLIFETIME(AC_Character, LastEscapeTime);
 }
 
 void AC_Character::ChangeAttack(int32 attack)
@@ -170,6 +177,8 @@ void AC_Character::ChangeAttack(int32 attack)
 		PS->MySkill = 0;
 		MyAttack = 0;
 		MySkill = 0;
+		PS->CharacterState = ECharacterStateType::Normal;
+
 		bAttackInputLock = false;
 		return;
 	}
@@ -180,6 +189,11 @@ void AC_Character::ChangeAttack(int32 attack)
 		MyAttack = attack;
 	}
 	else bAttackInputLock = false;
+}
+
+void AC_Character::ChangeState(ECharacterStateType target)
+{
+	GetPlayerState<AC_PlayerState>()->CharacterState = target;
 }
 
 void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
@@ -251,27 +265,9 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 void AC_Character::Escape(const FInputActionValue& Value)
 {
-	if (!IsLocallyControlled())return;
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-	if (!GameState)return;
-	if (!PS)return;
-	if (PS->Chakra == 0)return;
-	if (EscapeCDState == 0.f) {
-		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched || PS->CharacterState == ECharacterStateType::Grabbed) {
-			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
-			FVector TargetPlace = GetActorLocation();
-			for (APlayerState* OtherPS : GameState->PlayerArray) {
-				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
-					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
-					if (Distance <= EscapeRange)TargetPlace = OtherPS->GetPawn()->GetActorLocation();
-				}
-			}
-			SetActorLocation(TargetPlace);
-			Cast<AC_PlayerController>(Controller)->Server_ChangeCharacterState(ECharacterStateType::Normal);
-			Cast<AC_PlayerController>(Controller)->Server_EscapeEffect();
-		}
-	}
+	//服务器进行替身
+	Server_Escape();
+	
 }
 
 void AC_Character::FirstSkill(const FInputActionValue& Value)
@@ -281,6 +277,7 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!GameState)return;
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (FirstSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -297,6 +294,7 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!GameState)return;
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (SecondSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -311,6 +309,7 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -325,6 +324,7 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (!PS)return;
 	if (!GameState)return;
 	if (ScrollCDState == 0.f) {
@@ -341,6 +341,7 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (!PS)return;
 	if (!GameState)return;
 	if (SummonCDState == 0.f) {
@@ -352,10 +353,45 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	}
 }
 
+void AC_Character::Server_Escape_Implementation()
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!GameState)return;
+	if (!PS)return;
+	if (PS->Chakra == 0)return;
+	if (EscapeCDState == 0.f) {
+		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched) {
+			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+
+			//受击框为无碰撞，进入保护状态
+			Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
+			PS->CharacterState = ECharacterStateType::Protected;
+
+			//移动到替身位置
+			FVector TargetPlace = GetActorLocation();
+			for (APlayerState* OtherPS : GameState->PlayerArray) {
+				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
+					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
+					if (Distance <= EscapeRange)TargetPlace = OtherPS->GetPawn()->GetActorLocation();
+				}
+			}
+			TargetPlace.Z = 0.f;
+			SetActorLocation(TargetPlace);
+
+			//查克拉减少
+			Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra - 1);
+		}
+	}
+}
+
+
+
 void AC_Character::Server_Attack_Implementation()
 {
 	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (PS && bAttackInputLock == false) {
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
@@ -383,7 +419,7 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 		bSuccessHit = true;
 
 		//被攻击的对象受到伤害
-		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageType, Effect, EffectTime,MyGrabPoint);
+		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageState,DamageType, Effect, EffectTime,MyGrabPoint);
 	}
 }
 
@@ -406,11 +442,21 @@ void AC_Character::Tick(float DeltaTime)
 	if (GetActorLocation().X < MinLocation.X)SetActorLocation(FVector(MinLocation.X, GetActorLocation().Y, GetActorLocation().Z));
 	if (GetActorLocation().Y < MinLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MinLocation.Y, GetActorLocation().Z));
 
-	//受击处理
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
+
+	//受击处理
 	if (HasAuthority()) {//服务器控制
 		if (!PS)return;
+		if (PS->CharacterState == ECharacterStateType::Protected) {
+			Mult_ChangeProtectedAnim(true);
+
+			//1s后结束保护
+			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime) > 1.f) {
+				Mult_ChangeProtectedAnim(false);
+				PS->CharacterState = ECharacterStateType::Normal;
+			}
+		}
 		if (PS->CharacterState == ECharacterStateType::Launched) {
 			if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
 			if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
@@ -465,6 +511,13 @@ void AC_Character::Tick(float DeltaTime)
 		if (SummonCDState <= 0.f)SummonCDState = 0.f;
 	}
 	else SummonCDState = 0.f;
+}
+
+void AC_Character::Mult_ChangeProtectedAnim_Implementation(bool show)
+{
+	if (!Flipbook)return;
+	if(show)Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.6f));
+	else Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
 }
 
 void AC_Character::Mult_ChangeGravity_Implementation(bool able)

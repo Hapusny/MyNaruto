@@ -10,6 +10,8 @@ class UInputMappingContext;
 class UC_PlayerWidget;
 class AC_PlayerState;
 class AC_Character;
+enum class ECharacterStateType : uint8;
+enum class EAttackType : uint8;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FBeAttacked, FVector, float);
 /**
@@ -57,14 +59,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ChangeChakra(int TargetChakra);
 
-
-	//替身效果
-	UFUNCTION(Server, Reliable)
-	void Server_EscapeEffect();
-
 	//角色受击
 	UFUNCTION(BlueprintCallable)
-	void PlayerGetDamage(float Damage,EAttackType AttackType,FVector Effect,float EffectTime);
+	void PlayerGetDamage(float Damage, ECharacterStateType State,EAttackType AttackType,FVector Effect,float EffectTime);
 
 protected:
 	virtual void Tick(float DeltaSeconds) override;//更新UI

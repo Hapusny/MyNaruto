@@ -9,6 +9,7 @@
 #include "C_Character.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "C_GrabPoinnt.h"
 
 void AC_PlayerController::BeginPlay()
 {
@@ -46,17 +47,46 @@ void AC_PlayerController::Server_ChangeChakra_Implementation(int TargetChakra)
 	}
 }
 
-void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, FVector Effect, float EffectTime)
+void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType State, EAttackType AttackType, FVector Effect, float EffectTime)
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
-	GetPlayerState<AC_PlayerState>()->Attack = 0;
-	if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Grabbed)return;
-	if (AttackType == EAttackType::Launch) {
+	ECharacterStateType MyState = GetPlayerState<AC_PlayerState>()->CharacterState;
+
+	//金刚体和被抓取时不受攻击改变状态
+	if (MyState == ECharacterStateType::Unbreakable)return;
+	if (MyState == ECharacterStateType::Grabbed)return;
+
+
+	if (AttackType == EAttackType::Grab) {
+		GetPlayerState<AC_PlayerState>()->Attack = 0;
+		GetPlayerState<AC_PlayerState>()->MySkill = 0;
+		if(GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
+
+		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
+		GetPawn<AC_Character>()->Mult_ChangeGravity(false); 
+	}
+
+	//硬体不受非抓取常态攻击改变状态
+	if (MyState == ECharacterStateType::Armor && State == ECharacterStateType::Normal)return;
+
+	if (AttackType == EAttackType::Launch) {//击飞
+		GetPlayerState<AC_PlayerState>()->Attack = 0;
+		GetPlayerState<AC_PlayerState>()->MySkill = 0;
+		if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
+
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect, true, true);
 	}
-	else if (AttackType == EAttackType::Push) {
-		if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Normal) {
+	else if (AttackType == EAttackType::Push) {//平推
+		GetPlayerState<AC_PlayerState>()->Attack = 0;
+		GetPlayerState<AC_PlayerState>()->MySkill = 0;
+		if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
+
+		if (MyState == ECharacterStateType::Launched) {//击飞状态增加浮空
+			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
+			Cast<AC_Character>(GetPawn())->LaunchCharacter(FVector(0.f, 0.f, 20 * Effect.Length()), true, true);
+		}
+		else {//非击飞状态造成僵直
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
 			GetPawn()->AddActorLocalOffset(Effect);
 			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
@@ -70,17 +100,6 @@ void AC_PlayerController::PlayerGetDamage(float Damage, EAttackType AttackType, 
 				false
 			);
 		}
-		else if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Launched) {
-			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
-			FVector NewEffect = Effect;
-			NewEffect.Z = fabs(Effect.X * 30);
-			NewEffect.X = 0;
-			Cast<AC_Character>(GetPawn())->LaunchCharacter(NewEffect, true, true);
-		}
-	}
-	else {
-		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
-		GetPawn<AC_Character>()->Mult_ChangeGravity(false);
 	}
 }
 
@@ -107,13 +126,6 @@ void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill
 		PS->MySkill = TargetSkill;
 	}
 }
-
-void AC_PlayerController::Server_EscapeEffect_Implementation()
-{
-	//替身后查克拉减少
-	GetPlayerState<AC_PlayerState>()->Chakra--;
-}
-
 
 void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)
 {

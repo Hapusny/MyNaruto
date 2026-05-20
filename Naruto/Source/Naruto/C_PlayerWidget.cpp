@@ -16,8 +16,8 @@ void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int pl
 {
 	Player1Health->SetText(FText::FromString(FString::FromInt(player1Health)));
 	Player2Health->SetText(FText::FromString(FString::FromInt(player2Health)));
-	Player1Bar->SetPercent(player1Health / 100.f);
-	Player2Bar->SetPercent(player2Health / 100.f);
+	Player1Bar->SetPercent(player1Health / 1000.f);
+	Player2Bar->SetPercent(player2Health / 1000.f);
 	Player1Chakra->SetPercent(float(player1Chakra) / 4.0);
 	Player2Chakra->SetPercent(float(player2Chakra) / 4.0);
 	SetIconShow(Escape, EscapeCD, escapeCD);
