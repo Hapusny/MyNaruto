@@ -58,10 +58,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 
 
 	if (AttackType == EAttackType::Grab) {
-		GetPlayerState<AC_PlayerState>()->Attack = 0;
-		GetPlayerState<AC_PlayerState>()->MySkill = 0;
-		if(GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
-
+		PlayerStateReset();
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Grabbed;
 		GetPawn<AC_Character>()->Mult_ChangeGravity(false); 
 	}
@@ -70,17 +67,13 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 	if (MyState == ECharacterStateType::Armor && State == ECharacterStateType::Normal)return;
 
 	if (AttackType == EAttackType::Launch) {//»÷·É
-		GetPlayerState<AC_PlayerState>()->Attack = 0;
-		GetPlayerState<AC_PlayerState>()->MySkill = 0;
-		if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
+		PlayerStateReset();
 
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect, true, true);
 	}
 	else if (AttackType == EAttackType::Push) {//Æ½ÍÆ
-		GetPlayerState<AC_PlayerState>()->Attack = 0;
-		GetPlayerState<AC_PlayerState>()->MySkill = 0;
-		if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
+		PlayerStateReset();
 
 		if (MyState == ECharacterStateType::Launched) {//»÷·É×´Ì¬Ôö¼Ó¸¡¿Õ
 			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
@@ -101,6 +94,15 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 			);
 		}
 	}
+}
+
+void AC_PlayerController::PlayerStateReset()
+{
+	GetPlayerState<AC_PlayerState>()->Attack = 0;
+	GetPlayerState<AC_PlayerState>()->MySkill = 0;
+	GetPawn<AC_Character>()->bAttackInputLock = false;
+	GetPawn<AC_Character>()->Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
 }
 
 void AC_PlayerController::Server_ChangeAttackState_Implementation(int TargetAttack)

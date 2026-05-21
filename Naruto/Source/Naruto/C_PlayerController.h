@@ -63,6 +63,9 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void PlayerGetDamage(float Damage, ECharacterStateType State,EAttackType AttackType,FVector Effect,float EffectTime);
 
+private:
+	void PlayerStateReset();
+
 protected:
 	virtual void Tick(float DeltaSeconds) override;//¸üÐÂUI
 

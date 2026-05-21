@@ -277,7 +277,8 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!GameState)return;
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (FirstSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -294,7 +295,8 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!GameState)return;
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (SecondSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -309,7 +311,8 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -324,8 +327,9 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (!PS)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (!GameState)return;
 	if (ScrollCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
@@ -341,8 +345,9 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	if (!IsLocallyControlled())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
 	if (!PS)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (!GameState)return;
 	if (SummonCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
@@ -391,7 +396,7 @@ void AC_Character::Server_Attack_Implementation()
 {
 	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (PS->CharacterState != ECharacterStateType::Normal)return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
 	if (PS && bAttackInputLock == false) {
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
@@ -431,19 +436,21 @@ void AC_Character::Tick(float DeltaTime)
 	//每帧获取角色信息
 	GetInformation();
 
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
+
 	//根据角色高度同步动画高度
 	if (GetActorLocation().Z > 0) {
 		Flipbook->SetRelativeLocation(FVector(0, -GetActorLocation().Z,0));
 	}
 
 	//角色移动范围限制
-	if (GetActorLocation().X > MaxLocation.X)SetActorLocation(FVector(MaxLocation.X, GetActorLocation().Y, GetActorLocation().Z));
-	if (GetActorLocation().Y > MaxLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MaxLocation.Y, GetActorLocation().Z));
-	if (GetActorLocation().X < MinLocation.X)SetActorLocation(FVector(MinLocation.X, GetActorLocation().Y, GetActorLocation().Z));
-	if (GetActorLocation().Y < MinLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MinLocation.Y, GetActorLocation().Z));
-
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	if (!PS)return;
+	if (PS->CharacterState != ECharacterStateType::Grabbed) {//被抓取时不限制
+		if (GetActorLocation().X > MaxLocation.X)SetActorLocation(FVector(MaxLocation.X, GetActorLocation().Y, GetActorLocation().Z));
+		if (GetActorLocation().Y > MaxLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MaxLocation.Y, GetActorLocation().Z));
+		if (GetActorLocation().X < MinLocation.X)SetActorLocation(FVector(MinLocation.X, GetActorLocation().Y, GetActorLocation().Z));
+		if (GetActorLocation().Y < MinLocation.Y)SetActorLocation(FVector(GetActorLocation().X, MinLocation.Y, GetActorLocation().Z));
+	}
 
 	//受击处理
 	if (HasAuthority()) {//服务器控制
@@ -451,8 +458,8 @@ void AC_Character::Tick(float DeltaTime)
 		if (PS->CharacterState == ECharacterStateType::Protected) {
 			Mult_ChangeProtectedAnim(true);
 
-			//1s后结束保护
-			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime) > 1.f) {
+			//2s后结束保护
+			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime) > 2.f) {
 				Mult_ChangeProtectedAnim(false);
 				PS->CharacterState = ECharacterStateType::Normal;
 			}
@@ -466,11 +473,12 @@ void AC_Character::Tick(float DeltaTime)
 		}
 		if (PS->CharacterState == ECharacterStateType::Grabbed) {
 			if (BeGrabbedPoint && BeGrabbedPoint->bIsUsing) {
-				Mult_ChangeGrabLocation(BeGrabbedPoint->GetActorLocation());
+				if(GetActorLocation() != BeGrabbedPoint->GetActorLocation())Mult_ChangeGrabLocation(BeGrabbedPoint->GetActorLocation());
 			}
 			else {
-				PS->CharacterState = ECharacterStateType::Launched;
 				Mult_ChangeGravity(true);
+				GetCharacterMovement()->GravityScale = 1.f;
+				PS->CharacterState = ECharacterStateType::Launched;
 			}
 		}
 	}
