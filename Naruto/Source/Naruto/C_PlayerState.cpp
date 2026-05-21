@@ -6,7 +6,7 @@
 
 AC_PlayerState::AC_PlayerState()
 {
-	NetUpdateFrequency = 60.f;//网络同步频率
+	NetUpdateFrequency = 100.f;//网络同步频率
 }
 
 void AC_PlayerState::OnRep_Team()

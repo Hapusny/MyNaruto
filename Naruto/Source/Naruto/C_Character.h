@@ -76,7 +76,7 @@ public:
 
 protected:
 	UFUNCTION(NetMulticast, Reliable)
-	void Mult_ChangeBoxSize(FVector Size, int32 Box);
+	void Mult_ChangeBoxSize(FVector Size, FVector Offset, int32 Box);
 
 
 
@@ -290,6 +290,9 @@ public:
 	UFUNCTION(NetMulticast,Reliable)
 	void Mult_ChangeGrabLocation(FVector target);
 
+	//击飞状态
+	int32 LaunchState = 0;
+
 	//同步改变角色重力
 	UFUNCTION(NetMulticast, Reliable)
 	void Mult_ChangeGravity(bool able);
@@ -325,8 +328,7 @@ private:
 
 	float LastSummonTime = 0.f;//通灵
 
-	//击飞状态
-	int32 LaunchState = 0;
+	
 
 	//保护状态动画显示
 	bool bIsProtectedShow = false;

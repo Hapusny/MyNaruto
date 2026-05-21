@@ -51,6 +51,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	ECharacterStateType MyState = GetPlayerState<AC_PlayerState>()->CharacterState;
+	GetPawn<AC_Character>()->LaunchState = 0;
 
 	//金刚体和被抓取时不受攻击改变状态
 	if (MyState == ECharacterStateType::Unbreakable)return;

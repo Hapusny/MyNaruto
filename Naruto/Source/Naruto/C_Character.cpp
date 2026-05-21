@@ -115,34 +115,7 @@ void AC_Character::BeDameged(float Damage, ECharacterStateType State, EAttackTyp
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, State,Type, Effect, Time);
 }
 
-void AC_Character::AddChakra()
-{
-	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
-	if (!PS)return;
-	if (PS->Chakra < 4)Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra + 1);
-}
-
-void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
-{
-	//根据标记确认更改的碰撞框
-	UBoxComponent* TargetBox;
-	if (Box == 0) {
-		//保护状态受击框保持为无碰撞
-		if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Protected)return;
-		TargetBox = PlayerBox;
-	}
-	else TargetBox = AttackBox;
-
-	//同步更改服务器和客户端的碰撞体大小
-	Mult_ChangeBoxSize(Size, Box);
-
-	//根据朝向设置碰撞体翻转
-	if (!Toward)Offset.X = -Offset.X;
-	TargetBox->SetRelativeLocation(Offset);
-}
-
-
-void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, int32 Box)
+void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, FVector Offset, int32 Box)
 {
 	//根据标记确认更改的碰撞框
 	UBoxComponent* TargetBox;
@@ -153,8 +126,31 @@ void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, int32 Box)
 	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 
+	//根据朝向设置碰撞体翻转
+	if (!Toward)Offset.X = -Offset.X;
+	TargetBox->SetRelativeLocation(Offset);
+
 	//更改碰撞体大小
 	TargetBox->SetBoxExtent(Size);
+}
+
+void AC_Character::AddChakra()
+{
+	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
+	if (!PS)return;
+	if (PS->Chakra < 4)Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra + 1);
+}
+
+void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
+{
+	
+	if (Box == 0) {
+		//保护状态受击框保持为无碰撞
+		if (GetPlayerState<AC_PlayerState>()->CharacterState == ECharacterStateType::Protected)return;
+	}
+
+	//同步更改服务器和客户端的碰撞体
+	Mult_ChangeBoxSize(Size,Offset, Box);
 }
 
 void AC_Character::Server_SetSummonIndex_Implementation(int32 target)
@@ -373,6 +369,8 @@ void AC_Character::Server_Escape_Implementation()
 			Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
 			PS->CharacterState = ECharacterStateType::Protected;
 
+			GetCharacterMovement()->StopMovementImmediately();
+
 			//移动到替身位置
 			FVector TargetPlace = GetActorLocation();
 			for (APlayerState* OtherPS : GameState->PlayerArray) {
@@ -465,8 +463,13 @@ void AC_Character::Tick(float DeltaTime)
 			}
 		}
 		if (PS->CharacterState == ECharacterStateType::Launched) {
-			if (LaunchState == 0 && GetActorLocation().Z > 5.f)LaunchState = 1;
-			if (LaunchState == 1 && GetActorLocation().Z < 5.f) {
+			if (LaunchState == 0 && GetActorLocation().Z > 3.f)LaunchState = 1;
+			if (LaunchState == 1 && GetActorLocation().Z < 3.f) {
+				LaunchCharacter(FVector(0.f, 0.f, 200.f), true, true);
+				LaunchState = 2;
+			}
+			if (LaunchState == 2 && GetActorLocation().Z > 3.f)LaunchState = 3;
+			if (LaunchState == 3 && GetActorLocation().Z < 3.f) {
 				PS->CharacterState = ECharacterStateType::Normal;
 				LaunchState = 0;
 			}
