@@ -328,6 +328,8 @@ private:
 
 	float LastSummonTime = 0.f;//通灵
 
+	float ProtectedStartTime = 0.f;//替身
+
 	
 
 	//保护状态动画显示

@@ -24,6 +24,20 @@ void AC_PlayerController::BeginPlay()
 	SetInputMode(InputMode);
 }
 
+void AC_PlayerController::Client_ChangeInputAbility_Implementation(bool target)
+{
+	
+	if (target) {
+		FInputModeGameOnly InputMode;
+		SetInputMode(InputMode);
+	}
+	else {
+		FlushPressedKeys();
+		FInputModeUIOnly InputMode;
+		SetInputMode(InputMode);
+	}
+}
+
 void AC_PlayerController::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -52,6 +66,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	ECharacterStateType MyState = GetPlayerState<AC_PlayerState>()->CharacterState;
 	GetPawn<AC_Character>()->LaunchState = 0;
+	GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 
 	//金刚体和被抓取时不受攻击改变状态
 	if (MyState == ECharacterStateType::Unbreakable)return;
@@ -83,7 +98,6 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 		else {//非击飞状态造成僵直
 			GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Staggered;
 			GetPawn()->AddActorLocalOffset(Effect);
-			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 			GetWorldTimerManager().SetTimer(
 				BeAttackedTimerHandle,
 				[this]()

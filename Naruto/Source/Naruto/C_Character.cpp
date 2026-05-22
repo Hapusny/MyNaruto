@@ -364,6 +364,7 @@ void AC_Character::Server_Escape_Implementation()
 	if (EscapeCDState == 0.f) {
 		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched) {
 			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+			ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
 
 			//受击框为无碰撞，进入保护状态
 			Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
@@ -436,6 +437,8 @@ void AC_Character::Tick(float DeltaTime)
 
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
+	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
+	if (!GameState)return;
 
 	//根据角色高度同步动画高度
 	if (GetActorLocation().Z > 0) {
@@ -457,7 +460,7 @@ void AC_Character::Tick(float DeltaTime)
 			Mult_ChangeProtectedAnim(true);
 
 			//2s后结束保护
-			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - LastEscapeTime) > 2.f) {
+			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ProtectedStartTime) > 2.f) {
 				Mult_ChangeProtectedAnim(false);
 				PS->CharacterState = ECharacterStateType::Normal;
 			}
@@ -470,7 +473,11 @@ void AC_Character::Tick(float DeltaTime)
 			}
 			if (LaunchState == 2 && GetActorLocation().Z > 3.f)LaunchState = 3;
 			if (LaunchState == 3 && GetActorLocation().Z < 3.f) {
-				PS->CharacterState = ECharacterStateType::Normal;
+				//受击框为无碰撞，进入保护状态
+				Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
+				PS->CharacterState = ECharacterStateType::Protected;
+				ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
+
 				LaunchState = 0;
 			}
 		}

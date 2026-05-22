@@ -46,6 +46,8 @@ void AC_ArenaGM::HandleSeamlessTravelPlayer(AController*& C)
 
 void AC_ArenaGM::GameTerminate()
 {
+    Player1->Client_ChangeInputAbility(false);
+    Player2->Client_ChangeInputAbility(false);
     if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue > Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
         if (Player1->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {
             GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Blue Win!"));

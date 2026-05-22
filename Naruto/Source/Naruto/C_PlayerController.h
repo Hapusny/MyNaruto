@@ -29,6 +29,9 @@ public:
 
 	virtual void BeginPlay()override;
 
+	UFUNCTION(Client,Reliable)
+	void Client_ChangeInputAbility(bool target);
+
 	// ‰»Î”≥…‰
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputMappingContext* DefaultMappingContext;

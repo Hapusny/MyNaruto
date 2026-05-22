@@ -69,7 +69,7 @@ public:
 
     //½ÇÉ«ÊýÖµ
     UPROPERTY(Replicated, BlueprintReadWrite)
-    float HealthValue = 1000.f;
+    float HealthValue = 100.f;
 
     UPROPERTY(Replicated, BlueprintReadWrite)
     int32 Chakra = 2;
