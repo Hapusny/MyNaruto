@@ -13,6 +13,7 @@
 #include "PaperZDAnimInstance.h"
 #include "C_PlayerController.h"
 #include "C_PlayerState.h"
+#include "C_ArenaGM.h"
 #include "Components/BoxComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
@@ -22,7 +23,6 @@
 AC_Character::AC_Character()
 {
 	PrimaryActorTick.bCanEverTick = true;
-
 	//碰撞框
 	AttackBox = CreateDefaultSubobject<UBoxComponent>(TEXT("AttackBox"));
 	AttackBox->SetupAttachment(RootComponent);
@@ -113,6 +113,15 @@ void AC_Character::BeDameged(float Damage, ECharacterStateType State, EAttackTyp
 
 	//在PC中处理受击
 	Cast<AC_PlayerController>(Controller)->PlayerGetDamage(Damage, State,Type, Effect, Time);
+}
+
+void AC_Character::SetOtherPauseState(bool state)
+{
+	if (!HasAuthority())return;
+	AC_ArenaGM* MyGameMode = Cast<AC_ArenaGM>(UGameplayStatics::GetGameMode(this));
+	if (!MyGameMode)return;
+	if (GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue)MyGameMode->SetPlayerPauseState(1, state);
+	else MyGameMode->SetPlayerPauseState(0, state);
 }
 
 void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, FVector Offset, int32 Box)

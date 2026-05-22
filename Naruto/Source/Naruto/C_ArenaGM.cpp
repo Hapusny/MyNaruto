@@ -48,7 +48,7 @@ void AC_ArenaGM::GameTerminate()
 {
     Player1->Client_ChangeInputAbility(false);
     Player2->Client_ChangeInputAbility(false);
-    if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue > Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
+    if (PS1->HealthValue > PS2->HealthValue) {
         if (Player1->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {//蓝方获胜
             Player1->Client_SetWidgetEnd(0);
             Player2->Client_SetWidgetEnd(0);
@@ -58,7 +58,7 @@ void AC_ArenaGM::GameTerminate()
             Player2->Client_SetWidgetEnd(1);
         }
     }
-    else if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue < Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
+    else if (PS1->HealthValue < PS2->HealthValue) {
         if (Player2->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {//蓝方获胜
             Player1->Client_SetWidgetEnd(0);
             Player2->Client_SetWidgetEnd(0);
@@ -76,6 +76,27 @@ void AC_ArenaGM::GameTerminate()
     //3s后结束对战
     FTimerHandle ExitTimerHandle;
     GetWorldTimerManager().SetTimer(ExitTimerHandle, this, &AC_ArenaGM::BackToLobby, 3.0f, false);
+}
+
+void AC_ArenaGM::SetPlayerPauseState(int player, bool state)
+{
+    AC_PlayerController* TargetPlayer;
+    if (player) {//目标为红方
+        if (PS1->Team == ETeamType::Red)TargetPlayer = Player1;
+        else TargetPlayer = Player2;
+    }
+    else {//目标为蓝方
+        if (PS1->Team == ETeamType::Blue)TargetPlayer = Player1;
+        else TargetPlayer = Player2;
+    }
+    if (state) {
+        TargetPlayer->GetPawn()->CustomTimeDilation = 1.0f;
+        TargetPlayer->Client_ChangeInputAbility(true);
+    }
+    else {
+        TargetPlayer->GetPawn()->CustomTimeDilation = 0.0f;
+        TargetPlayer->Client_ChangeInputAbility(true);
+    }
 }
 
 void AC_ArenaGM::Tick(float DeltaSeconds)
@@ -169,7 +190,6 @@ void AC_ArenaGM::StartFight()
     Player1 = Cast<AC_PlayerController>(Players[0]);
     Player2 = Cast<AC_PlayerController>(Players[1]);
     MyGameState = Cast<AC_ArenaGS>(GameState);
-    MyGameState->FightStartTime = GameState->GetServerWorldTimeSeconds();//启动回合时钟
     if (Player1 && PS1)
     {
         Player1->PlayerBeAttacked.AddUObject(PS1, &AC_PlayerState::PlayerGetDamage);//PS绑定受击委托
@@ -180,6 +200,16 @@ void AC_ArenaGM::StartFight()
         Player2->PlayerBeAttacked.AddUObject(PS2, &AC_PlayerState::PlayerGetDamage);
         Player2->Client_ShowWidget();
     }
+
+    //3s后开始战斗
+    FTimerHandle TimerHandle;
+    GetWorldTimerManager().SetTimer(TimerHandle, [this]()
+        {
+            Cast<AC_ArenaGS>(GameState)->FightStartTime = GameState->GetServerWorldTimeSeconds();//启动回合时钟
+            Player1->Client_ChangeInputAbility(true);
+            Player2->Client_ChangeInputAbility(true);
+
+        }, 3.0f, false);
 }
 
 void AC_ArenaGM::BackToLobby()

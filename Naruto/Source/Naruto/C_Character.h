@@ -70,6 +70,10 @@ public:
 	void BeDameged(float Damage, ECharacterStateType State,EAttackType Type, FVector Effect, float Time, AC_GrabPoinnt* GrabPoint);
 
 
+	//设置对手停帧状态
+	UFUNCTION(BlueprintCallable)
+	void SetOtherPauseState(bool state);
+
 	//更改碰撞体
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);

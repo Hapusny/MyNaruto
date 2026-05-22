@@ -43,7 +43,8 @@ public:
 	UFUNCTION()
 	void GameTerminate();
 
-	
+	void SetPlayerPauseState(int player, bool state);
+
 
 protected:
 	virtual void Tick(float DeltaSeconds) override;//处理时间更新及结算判定

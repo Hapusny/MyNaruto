@@ -20,12 +20,12 @@ void AC_PlayerController::BeginPlay()
 	{
 		Subsystem->AddMappingContext(DefaultMappingContext, 0);
 	}
-	FInputModeGameOnly InputMode;
-	SetInputMode(InputMode);
 
 	if (IsLocalController()) {//Éú³ÉUI
 		if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);
 		PlayerWidget->AddToViewport();
+		FInputModeUIOnly InputMode;
+		SetInputMode(InputMode);
 	}
 	
 }

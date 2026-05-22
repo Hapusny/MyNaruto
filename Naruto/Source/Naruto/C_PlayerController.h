@@ -64,7 +64,6 @@ public:
 	void Server_ChangeChakra(int TargetChakra);
 
 	//½ÇÉ«ÊÜ»÷
-	UFUNCTION(BlueprintCallable)
 	void PlayerGetDamage(float Damage, ECharacterStateType State,EAttackType AttackType,FVector Effect,float EffectTime);
 
 private:
