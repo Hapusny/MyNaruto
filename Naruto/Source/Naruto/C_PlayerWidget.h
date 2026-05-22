@@ -78,6 +78,14 @@ protected:
 
 
 public:
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void WidgetGameStart();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void WidgetGameEnd(int res);
+
+
 	void SetTime(int time);
 
 	void SetUIShow(float player1Health = 100.f, float player2Health = 100.f, int player1Chakra = 2, int player2Chakra = 2,float escapeCD = 0.f,float skill1CD = 0.f,float skill2CD = 0.f,float scrollCD = 0.f,float summonCD = 0.f);

@@ -22,6 +22,12 @@ void AC_PlayerController::BeginPlay()
 	}
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
+
+	if (IsLocalController()) {//生成UI
+		if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);
+		PlayerWidget->AddToViewport();
+	}
+	
 }
 
 void AC_PlayerController::Client_ChangeInputAbility_Implementation(bool target)
@@ -149,10 +155,15 @@ void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)
 	if (PlayerWidget)PlayerWidget->SetTime(time);
 }
 
+void AC_PlayerController::Client_SetWidgetEnd_Implementation(int res)
+{
+	if (PlayerWidget)PlayerWidget->WidgetGameEnd(res);
+}
+
 void AC_PlayerController::Client_ShowWidget_Implementation()
 {
-	if (PlayerWidgetClass && !PlayerWidget)PlayerWidget = CreateWidget<UC_PlayerWidget>(this, PlayerWidgetClass);
-	PlayerWidget->AddToViewport();
+	if (!PlayerWidget)return;
+	PlayerWidget->WidgetGameStart();
 
 	//获取双方玩家状态以及自身忍者以更新UI
 	if (AGameStateBase* GS = GetWorld()->GetGameState())

@@ -49,24 +49,33 @@ void AC_ArenaGM::GameTerminate()
     Player1->Client_ChangeInputAbility(false);
     Player2->Client_ChangeInputAbility(false);
     if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue > Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
-        if (Player1->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {
-            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Blue Win!"));
+        if (Player1->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {//蓝方获胜
+            Player1->Client_SetWidgetEnd(0);
+            Player2->Client_SetWidgetEnd(0);
         }
-        else {
-            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Rad Win!"));
+        else {//红方获胜
+            Player1->Client_SetWidgetEnd(1);
+            Player2->Client_SetWidgetEnd(1);
         }
     }
     else if (Player1->GetPlayerState<AC_PlayerState>()->HealthValue < Player2->GetPlayerState<AC_PlayerState>()->HealthValue) {
-        if (Player2->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {
-            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Blue Win!"));
+        if (Player2->GetPlayerState<AC_PlayerState>()->Team == ETeamType::Blue) {//蓝方获胜
+            Player1->Client_SetWidgetEnd(0);
+            Player2->Client_SetWidgetEnd(0);
         }
-        else {
-            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("Rad Win!"));
+        else {//红方获胜
+            Player1->Client_SetWidgetEnd(1);
+            Player2->Client_SetWidgetEnd(1);
         }
     }
-    else GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, TEXT("No Winner!"));
-
-    MyGameState->FightStartTime = 0.f;
+    else {//平局
+        Player1->Client_SetWidgetEnd(2);
+        Player2->Client_SetWidgetEnd(2);
+    }
+    
+    //3s后结束对战
+    FTimerHandle ExitTimerHandle;
+    GetWorldTimerManager().SetTimer(ExitTimerHandle, this, &AC_ArenaGM::BackToLobby, 3.0f, false);
 }
 
 void AC_ArenaGM::Tick(float DeltaSeconds)
@@ -170,6 +179,18 @@ void AC_ArenaGM::StartFight()
     {
         Player2->PlayerBeAttacked.AddUObject(PS2, &AC_PlayerState::PlayerGetDamage);
         Player2->Client_ShowWidget();
+    }
+}
+
+void AC_ArenaGM::BackToLobby()
+{
+    if (Player1->IsLocalPlayerController()) {
+        Player2->ClientTravel(TEXT("/Game/Game/Map/Lobby"), TRAVEL_Absolute);
+        Player1->ClientTravel(TEXT("/Game/Game/Map/Lobby"), TRAVEL_Absolute);
+    }
+    else {
+        Player1->ClientTravel(TEXT("/Game/Game/Map/Lobby"), TRAVEL_Absolute);
+        Player2->ClientTravel(TEXT("/Game/Game/Map/Lobby"), TRAVEL_Absolute);
     }
 }
 

@@ -74,4 +74,6 @@ private:
 	void SpawnPawnToPlayer(TSubclassOf<AC_Character> PawnClass, APlayerController* Player);//为玩家生成选择的忍者
 
 	void StartFight();//战斗回合开始
+
+	void BackToLobby();
 };

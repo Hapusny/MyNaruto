@@ -40,14 +40,15 @@ public:
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<UC_PlayerWidget>PlayerWidgetClass;
 
-	//显示UI
+	//更新UI
 	UFUNCTION(Client,Reliable)
 	void Client_ShowWidget();
 
-	//更新UI
 	UFUNCTION(Client, Reliable)
 	void Client_SetWidgetTime(int time);
 
+	UFUNCTION(Client, Reliable)
+	void Client_SetWidgetEnd(int res);
 
 	//角色状态相关更新
 	UFUNCTION(Server,Reliable)
