@@ -200,7 +200,7 @@ public:
 
 	//替身数值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float EscapeRange = 100.f;//替身范围
+	float EscapeRange = 300.f;//替身范围
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float EscapeCD = 15.f;//替身CD
@@ -216,19 +216,19 @@ public:
 	float FirstSkillCDState = 0.f;//一技能CD状态
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float SecondSkillCD = 10.f;//二技能CD
+	float SecondSkillCD = 12.f;//二技能CD
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float SecondSkillCDState = 0.f;//二技能CD状态
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float ScrollCD = 10.f;//秘卷CD
+	float ScrollCD = 40.f;//秘卷CD
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float ScrollCDState = 0.f;//秘卷CD状态
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float SummonCD = 60.f;//通灵CD
+	float SummonCD = 200.f;//通灵CD
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float SummonCDState = 0.f;//通灵CD状态
@@ -239,6 +239,16 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector MinLocation = FVector(-800.f, 80.f, 0.f);
+
+	//保护状态持续时间
+	UPROPERTY(EditAnywhere)
+	float EscapeProtectedTime = 1.5f;//替身无敌时间
+
+	UPROPERTY(EditAnywhere)
+	float StandProtectedTime = 1.0f;//起身无敌时间
+
+private:
+	float ProtectedTime = 0.f;//保护时间
 
 
 protected:

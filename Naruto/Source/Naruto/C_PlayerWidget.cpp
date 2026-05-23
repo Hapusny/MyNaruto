@@ -12,18 +12,18 @@ void UC_PlayerWidget::SetTime(int time)
 	TimeText->SetText(FText::FromString(FString::FromInt(time)));
 }
 
-void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int player1Chakra, int player2Chakra, float escapeCD, float skill1CD, float skill2CD, float scrollCD,float summonCD)
+void UC_PlayerWidget::SetUIShow(float player1Health, float player2Health, int player1Chakra, int player2Chakra, float escapeCD, float skill1CD, float skill2CD, float skill3CD, float scrollCD,float summonCD)
 {
 	Player1Health->SetText(FText::FromString(FString::FromInt(player1Health)));
 	Player2Health->SetText(FText::FromString(FString::FromInt(player2Health)));
-	Player1Bar->SetPercent(player1Health / 1000.f);
-	Player2Bar->SetPercent(player2Health / 1000.f);
+	Player1Bar->SetPercent(player1Health / 300.f);
+	Player2Bar->SetPercent(player2Health / 300.f);
 	Player1Chakra->SetPercent(float(player1Chakra) / 4.0);
 	Player2Chakra->SetPercent(float(player2Chakra) / 4.0);
 	SetIconShow(Escape, EscapeCD, escapeCD);
 	SetIconShow(FirstSkill, FirstSkillCD, skill1CD);
 	SetIconShow(SecondSkill, SecondSkillCD, skill2CD);
-	SetIconShow(FinalSkill, FinalSkillCD, 0);
+	SetIconShow(FinalSkill, FinalSkillCD, skill3CD);
 	SetIconShow(Scroll, ScrollCD, scrollCD);
 	SetIconShow(Summon, SummonCD, summonCD);
 }
@@ -34,9 +34,13 @@ void UC_PlayerWidget::SetIconShow(TObjectPtr<UImage>& image, TObjectPtr<UTextBlo
 		cdText->SetVisibility(ESlateVisibility::Collapsed);
 		image->SetColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
 	}
-	else {
-		cdText->SetText(FText::FromString(FString::FromInt(cd)));
-		cdText->SetVisibility(ESlateVisibility::Visible);
+	else{
+		if (cd < 60.f) {
+			cdText->SetText(FText::FromString(FString::FromInt(cd)));
+			cdText->SetVisibility(ESlateVisibility::Visible);
+		}
+		else cdText->SetVisibility(ESlateVisibility::Collapsed);
+
 		image->SetColorAndOpacity(FLinearColor(0.33f, 0.33f, 0.33f, 1.0f));
 	}
 }

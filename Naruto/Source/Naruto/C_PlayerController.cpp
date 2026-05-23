@@ -52,11 +52,16 @@ void AC_PlayerController::Tick(float DeltaSeconds)
 	//本地每帧更新角色UI
 	if (!IsLocalController())return;
 	
-	if (PlayerWidget && PS1 && PS2 && MyPawn)PlayerWidget->SetUIShow(
-		PS1->HealthValue,PS2->HealthValue,PS1->Chakra,PS2->Chakra,
-		MyPawn->EscapeCDState,MyPawn->FirstSkillCDState,
-		MyPawn->SecondSkillCDState,MyPawn->ScrollCDState, MyPawn->SummonCDState
-	);
+	if (PlayerWidget && PS1 && PS2 && MyPawn) {
+		float FinalSkillCDState;
+		if (GetPlayerState<AC_PlayerState>()->Chakra == 4)FinalSkillCDState = 0.f;
+		else FinalSkillCDState = 100.f;
+		PlayerWidget->SetUIShow(
+			PS1->HealthValue, PS2->HealthValue, PS1->Chakra, PS2->Chakra,
+			MyPawn->EscapeCDState, MyPawn->FirstSkillCDState, MyPawn->SecondSkillCDState,
+			FinalSkillCDState,MyPawn->ScrollCDState, MyPawn->SummonCDState
+		);
+	}
 }
 
 void AC_PlayerController::Server_ChangeChakra_Implementation(int TargetChakra)

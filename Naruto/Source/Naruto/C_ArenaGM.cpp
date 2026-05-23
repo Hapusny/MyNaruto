@@ -72,6 +72,7 @@ void AC_ArenaGM::GameTerminate()
         Player1->Client_SetWidgetEnd(2);
         Player2->Client_SetWidgetEnd(2);
     }
+    MyGameState->FightStartTime = 0.f;
     
     //3s后结束对战
     FTimerHandle ExitTimerHandle;
@@ -201,7 +202,7 @@ void AC_ArenaGM::StartFight()
         Player2->Client_ShowWidget();
     }
 
-    //3s后开始战斗
+    //入场动画结束后开始战斗
     FTimerHandle TimerHandle;
     GetWorldTimerManager().SetTimer(TimerHandle, [this]()
         {
@@ -209,7 +210,7 @@ void AC_ArenaGM::StartFight()
             Player1->Client_ChangeInputAbility(true);
             Player2->Client_ChangeInputAbility(true);
 
-        }, 3.0f, false);
+        }, PlayerStartTime, false);
 }
 
 void AC_ArenaGM::BackToLobby()

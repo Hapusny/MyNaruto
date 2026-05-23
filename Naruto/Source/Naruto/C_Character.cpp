@@ -131,8 +131,16 @@ void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, FVector Offse
 	if (Box == 0)TargetBox = PlayerBox;
 	else TargetBox = AttackBox;
 
+	FVector TargetSize = Size;
+	if (TargetBox == AttackBox) {//受击时无法启动攻击框
+		AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+		if (!PS)return;
+		ECharacterStateType State = PS->CharacterState;
+		if (State == ECharacterStateType::Staggered || State == ECharacterStateType::Launched || State == ECharacterStateType::Grabbed)TargetSize = FVector(0.f, 0.f, 0.f);
+	}
+
 	//根据碰撞体尺寸设置碰撞性
-	if (Size.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	if (TargetSize.IsNearlyZero())TargetBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	else TargetBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 
 	//根据朝向设置碰撞体翻转
@@ -140,7 +148,7 @@ void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, FVector Offse
 	TargetBox->SetRelativeLocation(Offset);
 
 	//更改碰撞体大小
-	TargetBox->SetBoxExtent(Size);
+	TargetBox->SetBoxExtent(TargetSize);
 }
 
 void AC_Character::AddChakra()
@@ -259,7 +267,7 @@ void AC_Character::Move(const FInputActionValue& Value)
 		if (MovementVector.Y < 0 && Toward)Server_ChangeToward(false);
 		// add movement 
 		AddMovementInput(ForwardDirection, MovementVector.Y);
-		AddMovementInput(RightDirection, MovementVector.X);
+		AddMovementInput(RightDirection, MovementVector.X / 2.0f);
 	}
 }
 
@@ -374,6 +382,7 @@ void AC_Character::Server_Escape_Implementation()
 		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched) {
 			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
 			ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
+			ProtectedTime = EscapeProtectedTime;
 
 			//受击框为无碰撞，进入保护状态
 			Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
@@ -471,8 +480,8 @@ void AC_Character::Tick(float DeltaTime)
 				bInProtectAnim = true;
 			}
 
-			//2s后结束保护
-			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ProtectedStartTime) > 2.f) {
+			//结束保护
+			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ProtectedStartTime) > ProtectedTime) {
 				if (bInProtectAnim == true) {
 					Mult_ChangeProtectedAnim(false);
 					bInProtectAnim = false;
@@ -488,11 +497,11 @@ void AC_Character::Tick(float DeltaTime)
 			}
 			if (LaunchState == 2 && GetActorLocation().Z > 3.f)LaunchState = 3;
 			if (LaunchState == 3 && GetActorLocation().Z < 3.f) {
-				//受击框为无碰撞，进入保护状态
+				//受击框为无碰撞，进入起身保护状态
 				Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
 				PS->CharacterState = ECharacterStateType::Protected;
 				ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
-
+				ProtectedTime = StandProtectedTime;
 				LaunchState = 0;
 			}
 		}

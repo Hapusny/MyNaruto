@@ -40,6 +40,10 @@ public:
 	UPROPERTY(EditAnywhere)
 	float GameFightTime = 60.f;
 
+	//玩家开始操作时间
+	UPROPERTY(EditAnywhere)
+	float PlayerStartTime = 4.f;
+
 	UFUNCTION()
 	void GameTerminate();
 
