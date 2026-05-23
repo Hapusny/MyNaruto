@@ -71,7 +71,7 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 {
 	PlayerBeAttacked.Broadcast(GetPawn()->GetActorLocation(), Damage);
 	ECharacterStateType MyState = GetPlayerState<AC_PlayerState>()->CharacterState;
-	GetPawn<AC_Character>()->LaunchState = 0;
+
 	GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 
 	//金刚体和被抓取时不受攻击改变状态
@@ -90,13 +90,11 @@ void AC_PlayerController::PlayerGetDamage(float Damage, ECharacterStateType Stat
 
 	if (AttackType == EAttackType::Launch) {//击飞
 		PlayerStateReset();
-
 		GetPlayerState<AC_PlayerState>()->CharacterState = ECharacterStateType::Launched;
 		Cast<AC_Character>(GetPawn())->LaunchCharacter(Effect, true, true);
 	}
 	else if (AttackType == EAttackType::Push) {//平推
 		PlayerStateReset();
-
 		if (MyState == ECharacterStateType::Launched) {//击飞状态增加浮空
 			GetWorldTimerManager().ClearTimer(BeAttackedTimerHandle);
 			Cast<AC_Character>(GetPawn())->LaunchCharacter(FVector(0.f, 0.f, 20 * Effect.Length()), true, true);
@@ -121,6 +119,7 @@ void AC_PlayerController::PlayerStateReset()
 {
 	GetPlayerState<AC_PlayerState>()->Attack = 0;
 	GetPlayerState<AC_PlayerState>()->MySkill = 0;
+	GetPawn<AC_Character>()->LaunchState = 0;
 	GetPawn<AC_Character>()->bAttackInputLock = false;
 	GetPawn<AC_Character>()->Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;

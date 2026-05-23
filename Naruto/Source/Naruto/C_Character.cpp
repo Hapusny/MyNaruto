@@ -466,11 +466,17 @@ void AC_Character::Tick(float DeltaTime)
 	if (HasAuthority()) {//服务器控制
 		if (!PS)return;
 		if (PS->CharacterState == ECharacterStateType::Protected) {
-			Mult_ChangeProtectedAnim(true);
+			if (bInProtectAnim == false) {
+				Mult_ChangeProtectedAnim(true);
+				bInProtectAnim = true;
+			}
 
 			//2s后结束保护
 			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ProtectedStartTime) > 2.f) {
-				Mult_ChangeProtectedAnim(false);
+				if (bInProtectAnim == true) {
+					Mult_ChangeProtectedAnim(false);
+					bInProtectAnim = false;
+				}
 				PS->CharacterState = ECharacterStateType::Normal;
 			}
 		}

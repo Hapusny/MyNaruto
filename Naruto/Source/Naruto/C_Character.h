@@ -290,6 +290,11 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void Mult_ChangeProtectedAnim(bool show);
 
+private:
+	bool bInProtectAnim = false;
+
+public:
+
 	//同步改变角色被抓取位置
 	UFUNCTION(NetMulticast,Reliable)
 	void Mult_ChangeGrabLocation(FVector target);
