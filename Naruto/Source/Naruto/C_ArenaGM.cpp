@@ -96,7 +96,7 @@ void AC_ArenaGM::SetPlayerPauseState(int player, bool state)
     }
     else {
         TargetPlayer->GetPawn()->CustomTimeDilation = 0.0f;
-        TargetPlayer->Client_ChangeInputAbility(true);
+        TargetPlayer->Client_ChangeInputAbility(false);
     }
 }
 
