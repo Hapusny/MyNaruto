@@ -1,6 +1,6 @@
 # 火影忍者·决斗场 - 局域网对战版
 
-![UE5](https://img.shields.io/badge/Unreal%20Engine-5.0-000000?logo=unrealengine)
+![UE5](https://img.shields.io/badge/Unreal%20Engine-5.3-000000?logo=unrealengine)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
 ![Network](https://img.shields.io/badge/Network-LAN%20Multiplayer-green)
 
