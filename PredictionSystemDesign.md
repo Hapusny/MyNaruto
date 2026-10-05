@@ -70,7 +70,7 @@
 | 1.1.3-12 | 战斗与攻击 | 保护表现保护时半透明 | Mult_ChangeProtectedAnim 多播 | 表现（多播更正） |
 | 1.1.3-13 | 战斗与攻击 | 攻击命中标记 bSuccessHit | 服务器命中判定，动画派生用 | 锁 |
 | 1.1.3-14 | 战斗与攻击 | 攻击预输入 bPreInputLock | 服务器攻击逻辑 | 锁 |
-| 1.1.3-15 | 战斗与攻击 | 攻击输入锁 bAttackInputLock | 服务器与本地表现 | 锁（**普攻输入点的本地置位随段键回滚**，见 2.6.1） |
+| 1.1.3-15 | 战斗与攻击 | 攻击输入锁 bAttackInputLock | 服务器与本地表现 | 锁（**普攻输入点的本地置位由服务器补发的 `Client_CorrectLocks` 解除**，见 2.6.1） |
 | 1.1.3-16 | 战斗与攻击 | 伤害数值 DamageValue 等 | 动画通知修改，服务器读取 | 否 |
 | 1.1.3-17 | 战斗与攻击 | 攻击体生成 | 服务器 Spawn，多播表现 | 属性（部分） |
 | 1.1.3-18 | 战斗与攻击 | 攻击体伤害 AAN_SetDamage | 服务器伤害判定 | 属性（部分） |
@@ -96,7 +96,7 @@
 | 1.1.5-03 | 动画系统 | AN_ChangeAttack 切换普攻连段 | 服务器/客户端逻辑 | 状态（**时机类**：只在动画推进点切换表现，**不再写 `PS->Attack`**，见 2.4.4） |
 | 1.1.5-04 | 动画系统 | AN_ChangeAttackBox 改变攻击框 | Server_ChangeBox | 属性（部分） |
 | 1.1.5-05 | 动画系统 | AN_ChangePalyerBox 改变受击框 | Server_ChangeBox | 属性（部分） |
-| 1.1.5-06 | 动画系统 | AN_ChangeState 切换角色状态 | 状态复制 | 状态 |
+| 1.1.5-06 | 动画系统 | AN_ChangeState 切换角色状态 | 状态复制 | 状态（霸体授予：技能一/二 `Armor`、奥义/通灵 `Unbreakable`；由通知两端各自写入，**不进技能键**，见 5.9a） |
 | 1.1.5-07 | 动画系统 | AN_ChangeDamageValue 修改伤害参数 | 服务器读取 | 否 |
 | 1.1.5-08 | 动画系统 | AN_ChangeGravity 控制重力 | Mult_ChangeGravity | 属性（多播更正） |
 | 1.1.5-09 | 动画系统 | AN_StartHitCheck 开启命中检测 | 服务器判定 | 属性（命中判定） |
@@ -159,7 +159,7 @@
 
 项目里预测系统真正要处理的，为**状态预测、属性预测、锁预测**三类：
 
-- **状态预测**处理客户端输入后本地立即切换的状态变量，包括 `CharacterState`（攻击、技能、受击、保护、被抓取等）、`MySkill`（技能一/二/奥义/秘卷/通灵）、`Attack`（普攻连段）。动画状态机读取这些状态后立即切换动画。
+- **状态预测**处理客户端输入后本地立即切换的状态变量，分两层：**动作层**是 `MySkill`（技能一/二/奥义/秘卷/通灵）、`Attack`（普攻连段），由**输入点**本地先行；**状态层**是 `CharacterState`（受击、击飞、倒地、被抓、保护、霸体等），它**不由输入点写入**——受击类走受击路径（含攻方对敌方代理的预测，见 2.5.2），霸体类由动画通知 `AN_ChangeState` 写入（见 5.9a）。动画状态机读取这些状态后立即切换动画。
 - **属性预测**处理客户端输入后本地立即修改的数值、位置、朝向、时间戳，包括 `Chakra`（技能/替身预扣）、`Toward`（本地翻转）、位置（技能位移、替身瞬移本地先行）、CD 时间戳（本地记录技能释放时间）。此外，还包括**对敌方本地代理的影响**：攻方客户端预测自己命中后，敌方代理的 `HealthValue` 与 `CharacterState` 变化（见 2.5.2）——**己方血量不由本人预测**，只有"攻方预测敌方"这一个方向。UI 读取这些属性后立即更新血量条、查克拉槽、CD 显示。
 - **锁预测**处理客户端输入后本地立即置位的输入控制开关，包括 `bAttackInputLock`、`bPreInputLock`、`bSuccessHit`。
 
@@ -173,20 +173,20 @@
 | --- | --- | --- | --- | --- |
 | 状态预测 | 状态变量 | 是（建键并持有生命周期） | 非复制状态记变化记录；可复制状态只写标记 | 非复制：变化记录；可复制：权威值表 |
 | 属性预测 | 数值、位置、朝向、时间戳 | 否（共享当前活跃键） | 数值/朝向/时间戳写标记；位置只记一次性基线 | 数值/朝向/时间戳：权威值表；位置：一次性基线 |
-| 锁预测 | 输入控制开关 | 否 | 不记录（**普攻输入点的本地置位除外**，见 2.6.1） | 不参与回滚（**普攻输入点的本地置位除外**，随段键回滚）；其余锁由服务器 `Client_CorrectLocks` 直接覆盖 |
+| 锁预测 | 输入控制开关 | 否 | 不记录 | 不参与回滚；全部锁（含普攻输入点的本地置位）由服务器 `Client_CorrectLocks` 直接覆盖，见 2.6.1 |
 
 **回滚数据只有两处存放地**，不要在文档与代码中混用（锁的更正通道是第三处，但它不参与回滚）：
 
 | 存放地 | 装什么 | 何时写入 | 回滚时怎么用 |
 | --- | --- | --- | --- |
 | **权威值表**（挂在组件上，**跨键共享**） | 服务器权威值的副本，即表里对应的那一格 | **权威值表到达时**（含初始复制；**不再依赖 `REPNOTIFY_Always`**，见 2.7.1） | 拒绝 / 超时时把该格写回本地属性；判据是该字段**预测标记还在且未易主** |
-| **预测记录**（键下，**每键一份**） | ① 变化记录 / 表现记录（非复制数据的旧值与表现，逐条配对跟进 / 回滚委托）<br>② 位置的一次性基线 `MoveBaseline` / `bHasMoveBaseline`<br>③ 普攻锁快照 `bAttackInputLockSnapshot`（见 2.6.1） | ① 本地修改时逐条写<br>② 位移执行前捕获一次<br>③ 普攻键建键时捕获一次 | ① 逐条执行回滚委托（确认时执行跟进委托）<br>② 判据是 `bHasMoveBaseline`——位置**从不写预测标记**（拥有者收不到自身位置复制，等不到权威值，标记没有清除时机）<br>③ 判据是快照存在、且未被 `Client_CorrectLocks` 抢先 |
+| **预测记录**（键下，**每键一份**） | ① 变化记录 / 表现记录（非复制数据的旧值与表现，逐条配对跟进 / 回滚委托）<br>② 位置的一次性基线 `MoveBaseline` / `bHasMoveBaseline` | ① 本地修改时逐条写<br>② 位移执行前捕获一次 | ① 逐条执行回滚委托（确认时执行跟进委托）<br>② 判据是 `bHasMoveBaseline`——位置**从不写预测标记**（拥有者收不到自身位置复制，等不到权威值，标记没有清除时机） |
 
-这两处与 2.1 的三类预测的对应关系：可复制状态 / 属性 → 权威值表；非复制状态、表现、位置 → 预测记录；锁 → 更正通道，其中只有普攻输入点的一次置位落进预测记录。
+这两处与 2.1 的三类预测的对应关系：可复制状态 / 属性 → 权威值表；非复制状态、表现、位置 → 预测记录；锁 → 更正通道，**不进预测记录**（普攻输入点的本地置位也只有"本地置位 + 服务器更正"这一条路径，见 2.6.1）。
 
 为了统一管理「本地先行」与「服务器同步」的配对关系，**状态预测与属性预测共用一套标识机制——预测键（PredictionKey）**。每个状态变化预测行为生成一个预测键，键下挂载该行为的状态变化和其衍生的属性标记、位置变化、表现触发，以及对应的回滚/跟进委托。预测键的有效窗口等于其标记的状态生命周期，状态结束则键冻结。
 
-**锁预测不依托预测键**（**唯一例外**是普攻输入点的 `bAttackInputLock` 置位，它随段键回滚，见 2.6.1）。原因是锁的语义是「输入控制开关」：其最终控制权明确在服务器，客户端只做本地预判，服务器同步到达后直接覆盖即可；锁的置位/复位与状态变化同步发生，不需要独立的生命周期管理，也不需要旧值记录与委托。
+**锁预测不依托预测键**。原因是锁的语义是「输入控制开关」：其最终控制权明确在服务器，客户端只做本地预判，服务器同步到达后直接覆盖即可；锁的置位/复位与状态变化同步发生，不需要独立的生命周期管理，也不需要旧值记录与委托。普攻输入点的本地置位（2.6.1）同样不建键；它需要的是**配对的下发时机**，而不是回滚。
 
 ### 2.3 预测键
 
@@ -257,7 +257,7 @@
 **示例：玩家释放技能一**
 
 1. 本地生成预测键 `PK_001`（**每个技能取值都是一个独立状态，各自一个键**：技能一 / 技能二 / 奥义 / 秘卷与通灵——秘卷与通灵同为 `4`，动画相同、按同一状态处理，见 2.4.4），并绑定生命周期 `BindStateLifecycle(PK_001, "Self.PS.MySkill", 0)`（技能结束时自动冻结）。
-2. `AC_PlayerState::MySkill` 本地置为「技能一」，`CharacterState` 置为「技能」；标记 `Self.PS.MySkill`、`Self.PS.CharacterState` 正在被 `PK_001` 预测。
+2. `AC_PlayerState::MySkill` 本地置为「技能一」；标记 `Self.PS.MySkill` 正在被 `PK_001` 预测。（技能附带的霸体状态——技能一 / 技能二的 `Armor`、奥义 / 通灵的 `Unbreakable`——由动画通知 `AN_ChangeState` 在两端各自写入，**不是**输入点的本地先行，见 5.9a。）
 3. 动画状态机读取后立即播放技能动画。
 4. 服务器处理 `Server_ChangeSkillState` 后，**权威值表到达** → 更新权威值表、清除预测标记、采用权威值（**不再依赖 `REPNOTIFY_Always`**，见 2.7.1）。
 5. `Client_ResolvePrediction` 回执到达 → 结算 `PK_001`：确认则执行跟进委托；拒绝则执行回滚委托，**非复制状态变量按变化记录恢复旧值、可复制属性从权威值表恢复**，重新按权威值驱动动画。
@@ -310,7 +310,7 @@ void AC_Character::Attack(const FInputActionValue& Value)
     // 闸门 2：CharacterState ∈ {Normal, Protected} —— 镜像服务器的状态闸门（C_Character.cpp:416）
     // 通过后（仅本地控制端）：
     //   PS->Attack = PS->Attack + 1;      // 本地先行写段号
-    //   bAttackInputLock = true;          // 本地先行置锁（随本段键回滚，见 2.6.1）
+    //   bAttackInputLock = true;          // 本地先行置锁（不建快照、不随段键回滚；由服务器补发的 Client_CorrectLocks 解除，见 2.6.1）
     //   CreatePredictionKey(EPredictionType::Attack) → PK
     //   Server_Attack(PK)                 // 键随 RPC 发出
     // 不通过：不建键、不发 RPC（等价于服务器拒绝，且省下一次无谓往返）
@@ -338,7 +338,7 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 ##### 被拒绝的一段长什么样（已接受的代价）
 
-拒绝发生在「本地认为可以连段、服务器认为不可以」时（两道闸门不可能与服务器判据完全同源，例如服务器侧刚被受击打断）。此时本段键回滚：`Attack` 从权威值表恢复到服务器值（通常是上一段或 0），`bAttackInputLock` 的本地置位一并恢复并由 `Client_CorrectLocks` 覆盖，表现记录重新按权威段号驱动动画状态机。观感上是「多挥了一下，随即弹回」。
+拒绝发生在「本地认为可以连段、服务器认为不可以」时（两道闸门不可能与服务器判据完全同源，例如服务器侧刚被受击打断）。此时本段键回滚：`Attack` 从权威值表恢复到服务器值（通常是上一段或 0），表现记录重新按权威段号驱动动画状态机。**`bAttackInputLock` 的本地置位不随本段键回滚**——服务器在同一次处理里会补发一条 `Client_CorrectLocks`，本地锁由它解除（见 2.6.1）。观感上是「多挥了一下，随即弹回」。
 
 这是段粒度方案的固有代价——段间存在裁决点，就不存在零感知的预测。降低它靠的是把本地闸门做得与服务器判据一致，而不是靠事后补偿。
 
@@ -438,36 +438,49 @@ void AC_Character::Attack(const FInputActionValue& Value)
 
 锁预测处理客户端输入后本地立即置位的输入控制开关，包括 `bAttackInputLock`、`bPreInputLock`、`bSuccessHit`。锁属于**非复制数据**，处于状态和属性的上游，用于判断「状态是否可变化」。
 
-**锁预测不创建预测键，也不记录变化，更不参与跟进/回滚结算**——**唯一例外是普攻输入点的本地置位**（见 2.6.1）。理由是锁的语义为「输入控制开关」：最终控制权在服务器，客户端只做本地预判；锁的置位/复位与状态变化同步发生，不需要生命周期管理，也不需要旧值（回滚无从谈起——服务器说不行就不行）。
+**锁预测不创建预测键，也不记录变化，更不参与跟进/回滚结算**。理由是锁的语义为「输入控制开关」：最终控制权在服务器，客户端只做本地预判；锁的置位/复位与状态变化同步发生，不需要生命周期管理，也不需要旧值。唯一需要额外照顾的是普攻输入点的本地置位（2.6.1）——它要的不是回滚，而是一次**与拒绝成对的下发**。
 
 三个锁的具体规则：
 
 | 锁 | 本地先行 | 服务器更正 |
 | --- | --- | --- |
-| `bAttackInputLock` | 普攻输入瞬间本地置位（本地闸门 1 的实际依据，见 2.4.4）；**该次置位随段键回滚**（2.6.1） | 服务器 `Server_Attack` / `ChangeAttack` / `PlayerStateReset` 写入权威值后，通过 `Client_CorrectLocks` 下发 |
+| `bAttackInputLock` | 普攻输入瞬间本地置位（本地闸门 1 的实际依据，见 2.4.4）；**不建快照、不随段键回滚**，只由 `Client_CorrectLocks` 解除（2.6.1） | 服务器 `Server_Attack` / `ChangeAttack` / `PlayerStateReset` 写入权威值后，通过 `Client_CorrectLocks` 下发；**`Server_Attack` 的拒绝路径另补发一次**（2.6.1） |
 | `bPreInputLock` | 连段窗口的消费标志：服务器在 `Server_Attack_Implementation` 置 `true`（`C_Character.cpp:414`），由动画推进点消费（`C_Character.cpp:198-204`）。**它不是输入点的闸门** | 同上。**当前 C++ 中没有任何把它置回 `false` 的位置**（全项目仅 `:414` 写入、`:198` 读取），`ChangeAttack` 的 `else bAttackInputLock = false` 分支实际依赖动画蓝图复位它——接入前必须钉死复位点（见 5.8） |
 | `bSuccessHit` | 命中判定瞬间本地置位，用于提前触发命中派生动画 | 服务器 `OnAttackBoxOverlap` 写入权威判定后下发；攻击结束时的复位点见 5.6 |
 
-锁预测的接入点主要在 `AC_Character` 的攻击、技能、动画通知等函数中：原有代码只需在本地置位/复位锁处保持原样，并在**服务器每一处写锁的位置**调用 `Client_CorrectLocks` 下发权威值（见 2.8）。
+锁预测的接入点主要在 `AC_Character` 的攻击、技能、动画通知等函数中：原有代码只需在本地置位/复位锁处保持原样，并在**服务器每一处写锁的位置**调用 `Client_CorrectLocks` 下发权威值（见 2.8）。**普攻被拒绝时服务器并没有写锁**，所以 `Server_Attack_Implementation` 末尾还要补发一次——那一次不是"写锁"，而是让客户端的本地置位与拒绝成对（见 2.6.1）。
 
-#### 2.6.1 例外：普攻输入点的本地置位随段键回滚
+#### 2.6.1 普攻输入点的本地置位：不记录，靠服务器补发的更正解除
 
-普攻输入点的 `bAttackInputLock = true` 是**唯一**参与预测键回滚的锁。理由：它不是"表现开关"，而是本地闸门 1 的实际依据——本地就是靠它拦住越界的连段输入（2.4.4）。若它不被回滚，一次被服务器拒绝的输入会永久锁死本地的后续普攻。
+普攻输入点的 `bAttackInputLock = true` 是三个锁里唯一一个由"客户端输入瞬间直接置位"的，也是本地闸门 1 的实际依据——本地靠它拦住越界的连段输入（2.4.4）。它**不建快照、不随段键回滚、不进预测记录**：客户端对锁没有任何回滚语义，本地锁的复位**只有一个来源**——`Client_CorrectLocks`。
 
 | 项 | 规则 |
 | --- | --- |
-| 快照 | 普攻输入点建键时，把当时的 `bAttackInputLock` 记入预测记录（`bHasAttackLockSnapshot` / `bAttackInputLockSnapshot`，见 3.3.1）。只有 `EPredictionType::Attack` 的键会写这份快照 |
-| 回滚依据 | 该快照，**不是权威值表**——锁不复制、不进权威值表，权威值无从维护 |
-| 触发时机 | `RollbackPrediction` 中与其它回滚项一起执行；未写过快照的键跳过 |
-| **与权威更正抢先后** | 额外记录"最后写 `bAttackInputLock` 的键"（`LastAttackLockWriterKey`）：普攻输入点置位时写入本键 ID，`Client_CorrectLocks` 到达时清零。回滚时若发现已被清零，说明权威更正已到 → **跳过，不回写快照**（否则迟到的回滚会把刚收到的权威值改回去）。这与 2.7.2 的两条防护规则是同一个写法 |
-| 与 `Client_CorrectLocks` 的关系 | 回滚只是让本地值立刻回到预测前；`Client_CorrectLocks` 始终是唯一权威来源，无条件覆盖 |
-| 其它锁 | 不记录、不回滚（保持原有规则） |
+| 置位 | 普攻输入点本地先行置 `true`（仅本地控制端，且已过两道闸门） |
+| 解除 | **只由 `Client_CorrectLocks` 解除**，与预测键结算无关 |
+| 记录 | 不写快照、不写预测标记、不注册委托 |
+| 与段键的关系 | 段键被拒绝时，`Attack` 从权威值表恢复、表现按权威段号重驱；**回滚不改写任何锁值** |
+| 其它锁 | 同规则：不记录、不回滚 |
+
+**为什么服务器要在拒绝路径上补发一次更正。** `Client_CorrectLocks` 原本只在服务器**写锁**的位置下发（2.8），而"这次普攻被拒绝"恰恰意味着服务器**没有写锁**——两道闸门都没通过时，整条 `Server_Attack_Implementation` 不碰锁。于是本地那次置位的解除就只剩"等服务器下一次与之无关的写锁"这一条路，而这条路并不必然存在。后果不是多挥一下，而是**本地闸门 1 自锁**：
+
+1. 本地锁卡在 `true` → 闸门 1 拦住本机后续每一次普攻输入；
+2. 被拦住的恰恰是**唯一能让服务器再写一次锁的输入**——服务器写锁只在 `Server_Attack` / `ChangeAttack` / `PlayerStateReset` 三处，而 `Server_Attack` 要收到 RPC 才会执行；
+3. 结果是本地普攻一直没反应，直到玩家再次被击中（`PlayerStateReset` 写锁）。
+
+因此在 `Server_Attack_Implementation` 末尾补一次下发：**无论这次请求被接受还是被拒绝，函数返回前都按当时的最新锁值调用一次 `Client_CorrectLocks`**（见 2.8 的服务器调用点表）。接受路径的写锁本来就要下发，由这一次一并覆盖；拒绝路径由此与更正成对——"本地置了真、服务器说不行 → 假立刻被送回来"，客户端因此不需要任何快照、写者标记或回滚。
+
+这样做的另一个好处是 2.6.2 的「独立性」得以成立：**锁的更正通道不参与预测键结算**。也不需要 `LastAttackLockWriterKey` 之类的写者标记——客户端不再有任何回滚会去改写 `bAttackInputLock`，也就没有"迟到的回滚覆盖刚收到的权威值"这回事。
+
+> 另一条拒绝路径（服务器侧 `bAttackInputLock` 已为真，即服务器还在连段）本就不需要额外处理：此时服务器锁为真，本地置的真与它一致、不是陈旧值；连段结束时 `ChangeAttack`（`C_Character.cpp:195` / `:204`）写 `false` 并下发，本地随之解除。
+>
+> 而"服务器改了 `CharacterState` 却没写锁"这种情况，今天的代码里暂时撞不上：受击打断的三条路径都先调 `PlayerStateReset()`（`C_PlayerController.cpp:88 / 97 / 102`），而写锁就在它里面（`:128`）。但 5.8（`ChangeState` 加权限语义、客户端先行改走预测接口）与 5.9(a)（动画通知切成权威门控）正是朝这个方向改的——**不要把这条配对建立在巧合上**。
 
 #### 2.6.2 关键设计点
 
 - **本地预判**：锁在客户端输入瞬间即置位/复位，用于本地输入控制与表现触发。
-- **服务器权威覆盖**：服务器写锁的位置统一通过 `Client_CorrectLocks` 向拥有者客户端下发权威值，客户端直接覆盖。
-- **不建键、不记录、不结算**：锁不占用预测键、变化记录、委托与缓冲池中的任何资源；**唯一例外**是普攻输入点的本地置位（2.6.1）。
+- **服务器权威覆盖**：服务器写锁的位置统一通过 `Client_CorrectLocks` 向拥有者客户端下发权威值，客户端直接覆盖；**普攻的拒绝路径也补发一次**（2.6.1）。
+- **不建键、不记录、不结算**：锁不占用预测键、变化记录、委托与缓冲池中的任何资源；普攻输入点的本地置位同样不记录（2.6.1）。
 - **独立性**：锁的更正通道独立于状态与属性的回滚路径，避免与预测键结算耦合。
 - **不进权威值表**（已定）：锁**不并入** 2.7 的权威值表、不随表同步。锁都是 `bool`，语义是「服务器在哪儿改就在哪儿就地置/清」，与客户端侧的本地置位/复位成对出现，独立的 `Client_CorrectLocks` 通道已经够用；并入表会让同一张表同时承载「权威值的副本」与「本地先行」，还得在表里再区分哪些字段允许回写，得不偿失。
 
@@ -672,7 +685,8 @@ void Client_CorrectLocks(uint8 LockMask, uint8 LockValues);
 
 | 位置 | 写入内容 |
 | --- | --- |
-| `AC_Character::Server_Attack_Implementation` | `bPreInputLock = true`、`bAttackInputLock = true` |
+| `AC_Character::Server_Attack_Implementation`（被接受时） | `bPreInputLock = true`、`bAttackInputLock = true` |
+| `AC_Character::Server_Attack_Implementation`（**函数末尾，含拒绝路径**） | **不下发新值：按当时的最新锁值补发一次**。被拒绝时服务器没有写锁，靠这一次让客户端的本地置位与拒绝成对解除（见 2.6.1）；被接受时的写锁下发也由这一次覆盖 |
 | `AC_Character::ChangeAttack` | 连段结束 `bAttackInputLock = false`；预输入被消费分支 |
 | `AC_PlayerController::PlayerStateReset` | 受击/抓取/击飞打断时 `bAttackInputLock = false` |
 | `AC_Character::OnAttackBoxOverlap` | `bSuccessHit = true` |
@@ -681,7 +695,7 @@ void Client_CorrectLocks(uint8 LockMask, uint8 LockValues);
 **约定**：
 
 - 使用 `Reliable`，与项目现有 RPC 风格一致；同一 Actor 的可靠 RPC 保序。
-- 客户端收到后**直接覆盖**本地锁值，不检查预测键（锁不参与结算）。同时把 `LastAttackLockWriterKey` 清零，使迟到的段键回滚不再改写 `bAttackInputLock`（见 2.6.1）。
+- 客户端收到后**直接覆盖**本地锁值，不检查预测键（锁不参与结算，也没有任何回滚会改写锁值——见 2.6.1）。
 - 迟到覆盖：若服务器已决定 `false` 并发出，而客户端本地又置了 `true`，更正到达后会覆盖较新的本地预测（表现为一帧闪烁，下一次服务器写锁会再次纠正）。**要消除它，就得让这条 RPC 携带 `FPredictionKey`**（裸 `KeyID` 不可跨机传，见 5.10），但那会把锁重新拉进预测键机制，与 2.6「锁不建键、不结算、独立通道」的定案冲突——**因此不做**，这一帧闪烁按已知竞态接受（与 2.7.2 记录的两条同级）。
 - 若服务器是**主动改锁**（如 `PlayerStateReset` 把 `bAttackInputLock` 由 true 改为 false），本次写锁本身也会触发下发，不存在"值没变不下发"的问题——该问题只出现在拒绝路径，而拒绝路径正是本 RPC 覆盖的场景。
 
@@ -779,7 +793,7 @@ void Client_ResolvePrediction(
 | 本地生成物 | 销毁本地预测生成的攻击体、特效，或标记为无效（**预测记录**①：回滚委托） |
 | 可复制属性（数值 / 朝向 / 时间戳，含敌方代理） | **权威值表**：把对应字段写回本地属性（`Self.PS.*`、`Self.Char.*`、`Enemy.PS.*`） |
 | 位置（位移 / 瞬移） | **预测记录**②：`MoveBaseline`（`Self.Move.*`），判据是 `bHasMoveBaseline`，从不写标记 |
-| 锁 | 不在回滚边界内；由 `Client_CorrectLocks` 直接覆盖。**唯一例外**：普攻输入点的 `bAttackInputLock` 置位随段键回滚（**预测记录**③，见 2.6.1） |
+| 锁 | 不在回滚边界内；全部由 `Client_CorrectLocks` 直接覆盖（含普攻输入点的本地置位，见 2.6.1）。**回滚不写任何锁值** |
 
 > 回滚逐项判断，遵循 2.7.2 的两条防护规则（已无标记 → 跳过；标记已易主 → 跳过）。位置项额外判断 `bHasMoveBaseline`，未捕获过基线的键不恢复位置。
 
@@ -833,7 +847,7 @@ void Client_ResolvePrediction(
 - **预测键创建与使用**：客户端输入触发本地先行逻辑时，由角色调用组件接口创建预测键；键下挂载本次预测衍生的状态变化、属性标记、位置变化、表现触发以及回滚/跟进委托。
 - **原有代码的增量修改**：原有功能函数不需要被替换，只需在关键位置插入组件调用——状态本地置位处调用 `CreatePredictionKey`；可复制属性本地修改处调用 `MarkReplicatedAttribute`；非复制数据本地修改处调用 `RecordStateChange` / `RecordPresentation`；服务器同步到达处调用 `ResolvePrediction` / `ApplyAuthorityValueTable` / `OnMulticastArrived`。
 - **委托回调的增量添加**：原有代码只需为需要跟进或回滚的非复制数据增加少量委托回调，回调内容通常是「恢复旧值」「确认新值」「重新按权威值驱动动画/UI」。可复制属性不需要委托——由权威值表统一负责。
-- **锁的接入**：保持本地置位/复位不变，在服务器写锁处调用 `Client_CorrectLocks`；不涉及预测键、记录与委托——**唯一例外**是普攻输入点的 `bAttackInputLock` 置位，它随段键回滚（见 2.6.1）。
+- **锁的接入**：保持本地置位/复位不变，在服务器写锁处调用 `Client_CorrectLocks`，并在 `Server_Attack` 的拒绝路径补发一次（见 2.6.1）；不涉及预测键、记录与委托。
 - **动画通知的两类分法**：接入时必须先把现有动画通知切成两类（见 3.8 与 5.9）。**时机类**（连段推进 `AN_ChangeAttack`（只切表现、不写段号，见 2.4.4）、位移 `AN_MakeMove`、碰撞框变更）承载的是时序信号，两端都要执行，且是"本地先行 + 记录"的首写点；**纯权威类**（特效、音效、纯表现开关）应改为 `HasAuthority()` 门控，只由服务器触发、再经多播分发。当前项目中两类混写（`HasAuthority()` 判断与两端执行交错），需要一并整理——否则预测系统会把"两端各播一次"的问题放大成"回滚后又播一次"。
 - **降级策略（重要）**：预测系统不是"必须存在"的。若 `AC_Character` 上找不到预测组件，或组件判定当前不可预测（`CanPredict() == false`：组件未初始化、角色 / PlayerState / Controller 任一缺失、调试开关关闭；**本地控制判断由调用方在输入入口完成**，见 3.4.1），各处接入点**回退到原有路径**——直接发原 Server RPC，不建键、不写标记、不记变化。这既保证"未接入 / 被关闭"时游戏仍按原逻辑跑，也是逐功能增量接入的基础。
 
@@ -944,7 +958,6 @@ public:
 | 预测记录表 | `TMap<uint32, FPredictionRecord>` | 存储每个预测键对应的完整本地记录。 |
 | 预测标记表 | `TMap<FName, uint32>` | 键为属性名（含 `Self.` / `Enemy.` 前缀），值为预测键 ID，表示该属性当前正在被哪个预测键预测。 |
 | 权威值表引用（引用，非副本） | `UC_AuthorityValueComponent*` | 表**不在**本组件里：正文在权威值表组件上，本组件只持有该组件的引用（见 3.2）。客户端手上只有那一份，它同时就是权威值（见 2.7.2）；服务器侧也不另存副本，直接读真实属性。 |
-| 攻击锁写者 | `uint32 LastAttackLockWriterKey` | 最后写 `bAttackInputLock` 的预测键 ID；`Client_CorrectLocks` 到达时清零。使迟到的段键回滚不覆盖权威值（见 2.6.1）。 |
 | 委托表 | `TMap<uint32, FPredictionDelegates>` | 每个预测键的跟进/回滚委托列表，按注册顺序执行。 |
 | 未结算缓冲池 | `TArray<uint32>` | 已冻结、待结算的预测键 ID；结算或超时回滚后出池。 |
 
@@ -1106,8 +1119,6 @@ struct FPredictionRecord
     TArray<FStateLifecycleBinding> LifecycleBindings;   // 状态生命周期绑定列表
     FVector MoveBaseline = FVector::ZeroVector;         // 位置类预测的一次性基线（位移执行前的位置）
     bool bHasMoveBaseline = false;                      // 本键是否捕获过位置基线
-    bool bHasAttackLockSnapshot = false;                // 本键是否快照过 bAttackInputLock（仅普攻段键会置位，见 2.6.1）
-    bool bAttackInputLockSnapshot = false;              // 快照值
     float StartTime = 0.f;
     float EndTime = 0.f;
     bool bResolved = false;   // 是否已结算
@@ -1119,7 +1130,7 @@ struct FPredictionRecord
 | 结构体 | 用途 |
 | --- | --- |
 | `FPredictionKey` | 轻量预测键，只存 ID、类型、客户端请求时间；跨 RPC 传入服务器。带自定义 `NetSerialize`：**只对发起连接有效**，其他连接读到 `KeyID = 0`。 |
-| `FPredictionRecord` | 完整预测记录，存属性标记、变化记录、生命周期、**位置基线**、**普攻锁快照**；只存客户端。**不含委托列表**，委托集中存于委托表。 |
+| `FPredictionRecord` | 完整预测记录，存属性标记、变化记录、生命周期、**位置基线**；只存客户端。**不含委托列表**，委托集中存于委托表。 |
 | `FStateLifecycleBinding` | 状态生命周期绑定，记录 `StateName` 与 `EndStateValue`。 |
 | `FStateChangeRecord` | 非复制状态变量变化记录。 |
 | `FPresentationRecord` | 表现触发记录。 |
@@ -1155,7 +1166,7 @@ enum class EPredictionType : uint8
 | --- | --- |
 | `None` | 无效预测类型。 |
 | `Attack` | 普攻预测，对应 `Self.PS.Attack` 与连段状态。 |
-| `Skill` | 技能预测，对应 `Self.PS.MySkill` / `CharacterState`。 |
+| `Skill` | 技能预测，对应 `Self.PS.MySkill`（技能的霸体状态由动画通知写入、不进技能键，见 5.9a）。 |
 | `Escape` | 替身预测，对应 `MySkill`、`Chakra`、`LastEscapeTime`、位置瞬移。 |
 | `Scroll` | 秘卷预测——与 `Summon` 同属 `MySkill = 4` 这**一个**状态，**键判据相同**（`MySkill` 不变即同一状态），类型只记录输入来源（`SummonIndex` 0 / 1），不产生两个键（见 2.4.4）。 |
 | `Summon` | 通灵预测——同上；两者的动画相同，按同一状态处理。 |
@@ -1411,9 +1422,8 @@ private:
     │       BindStateLifecycle(PK_001, "Self.PS.MySkill", 0)   // 技能结束时自动冻结
     │
     ├─ 状态预测：本地置位 + 写预测标记
-    │       Self.PS.MySkill = 1；Self.PS.CharacterState = Skill
+    │       Self.PS.MySkill = 1
     │       MarkReplicatedAttribute("Self.PS.MySkill", PK_001)
-    │       MarkReplicatedAttribute("Self.PS.CharacterState", PK_001)
     │
     ├─ 属性预测：预扣 Chakra、记录 CD 时间戳
     │       MarkReplicatedAttribute("Self.PS.Chakra", PK_001)
@@ -1422,9 +1432,6 @@ private:
     ├─ 属性预测：位置本地先行（由动画通知 AN_MakeMove 在两端执行）
     │       RecordMoveBaseline()                // 捕获位移前位置（一次性基线，不入表）
     │       AddActorLocalOffset(Offset)         // 位移本体
-    │
-    ├─ 锁预测：本地置位
-    │       bAttackInputLock = true
     │
     ├─ 表现记录：技能动画、特效、音效
     │       RecordPresentation("SkillAnim", ConfirmDelegate, RollbackDelegate)
@@ -1469,8 +1476,8 @@ private:
 
 锁更正到达
     │
-    └─ Client_CorrectLocks(Mask, Values)
-            └─ 直接覆盖本地锁值
+    └─ Client_CorrectLocks(Mask, Values)   // 含 Server_Attack 拒绝路径的补发（2.6.1）
+            └─ 直接覆盖本地锁值（不回滚、不查预测键）
 ```
 
 #### 3.6.2 示例二：替身（含敌方代理属性）
@@ -1524,7 +1531,7 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 | 回执宿主 | `AC_PlayerController::Client_ResolvePrediction`（Client, Reliable；宿主为 PlayerController 而非 Character，理由见 2.11.1） |
 | 锁更正 | `AC_Character::Client_CorrectLocks`（Client, Reliable，位域约定见 2.8） |
 | 枚举 | `EPredictionType` |
-| 结构体 | `FPredictionKey`（USTRUCT + UPROPERTY + **自定义 `NetSerialize`**，只对发起连接有效）、`FPredictionRecord`（含 `MoveBaseline` / `bHasMoveBaseline` 与普攻锁快照）、`FStateLifecycleBinding`、`FStateChangeRecord`、`FPresentationRecord`、`FAuthorityValueTable`（USTRUCT，**会复制**，带类型字段）、`FPredictionDelegates` |
+| 结构体 | `FPredictionKey`（USTRUCT + UPROPERTY + **自定义 `NetSerialize`**，只对发起连接有效）、`FPredictionRecord`（含 `MoveBaseline` / `bHasMoveBaseline`）、`FStateLifecycleBinding`、`FStateChangeRecord`、`FPresentationRecord`、`FAuthorityValueTable`（USTRUCT，**会复制**，带类型字段）、`FPredictionDelegates` |
 | 委托类型 | `FConfirmDelegate`、`FRollbackDelegate` |
 | 前提（非接口，同样冻结） | 被预测的复制属性**从逐属性复制中摘除**、改由权威值表下发（2.7.1）；其中 `Attack` 必须摘除；位置类属性**不入表**、只记一次性基线（2.5.1-C / 2.9） |
 
@@ -1547,7 +1554,7 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 | 动画系统 | 不替代动画系统；动画状态机仍读取 `MyAttack`、`MyCState`、`MySkill`、`MySpeed` 等变量。预测组件只让这些变量（经由 PlayerState）在客户端更早进入预测值。**接入前必须先把动画通知切成两类**（时机类 / 纯权威类，见 2.12 与 5.9）。 |
 | UI 系统 | 不替代 UI 系统；UI 仍读取 `HealthValue`、`Chakra`、CD 状态等变量。预测组件只让这些变量在客户端更早进入预测值。 |
 | 摄像机 | 不纳入预测；摄像机读取（含预测值在内的）最终朝向与位置，被动跟随，无需预测支持。 |
-| 锁 | 不进入预测键机制：本地先行置位，服务器写锁处通过 `Client_CorrectLocks` 下发权威值（**唯一例外**：普攻输入点的 `bAttackInputLock` 置位随段键回滚，见 2.6.1）。 |
+| 锁 | 不进入预测键机制：本地先行置位，服务器写锁处（外加 `Server_Attack` 的拒绝路径）通过 `Client_CorrectLocks` 下发权威值；客户端不做锁的回滚（见 2.6.1）。 |
 | 服务器 | 服务器端同样挂载预测组件，但只作为预测键回传与校验结果的参照，不执行本地先行逻辑。 |
 
 ---
@@ -1564,7 +1571,7 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 5. **超时兜底**：由 `AC_Character::Tick` 调用 `TickPredictionTimeout`，无需逐功能实现。
 6. **降级**：每个接入点都以 `CanPredict()` 为前置判断，为 false 时走原有路径。**不允许出现"只有预测路径、没有原始路径"的接入**——这是"预测系统可整体关闭"的保证（见 2.12）。
 
-**锁预测的扩展方式不同**：只需要在服务器每一处写锁的位置调用 `Client_CorrectLocks` 下发权威值，客户端本地置位/复位保持不变；不建键、不记录、不注册委托（**唯一例外**：普攻输入点的 `bAttackInputLock` 置位，随段键回滚，见 2.6.1）。
+**锁预测的扩展方式不同**：只需要在服务器每一处写锁的位置调用 `Client_CorrectLocks` 下发权威值，客户端本地置位/复位保持不变；不建键、不记录、不注册委托。**普攻的拒绝路径也要补发一次**——服务器拒绝普攻时并没有写锁，那一次补发是客户端本地置位与拒绝成对的唯一时机（见 2.6.1）。
 
 ---
 
@@ -1622,11 +1629,11 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 
 ### 5.5 锁更正通道
 
-新增 `AC_Character::Client_CorrectLocks`，并在 2.8 列出的每一处服务器写锁位置调用。锁**不**加 `Replicated`，客户端收到后同时把 `LastAttackLockWriterKey` 清零（见 2.6.1）。
+新增 `AC_Character::Client_CorrectLocks`，在 2.8 列出的每一处服务器写锁位置调用，**外加 `Server_Attack_Implementation` 末尾的一次补发**（含拒绝路径，见 2.6.1）。锁**不**加 `Replicated`；客户端收到后直接覆盖本地锁值，不做任何记录。
 
 ### 5.6 `bSuccessHit` 复位点
 
-`bSuccessHit` 目前只在服务器命中判定时被置 `true`（`C_Character.cpp:441`），**C++ 里没有任何复位路径**。**定案：它是纯服务器侧的值，置位与复位都归服务器**——全项目只有一处使用（某一个技能用它判断是否进入技能的下一段），因此复位点与读取点同处：那门技能的服务器判定逻辑消费掉它之后随即复位，不引入新的复位时机。客户端只经 `Client_CorrectLocks` 接收。该锁不参与段键回滚（见 2.6.1 的例外范围），其权威值只来自这条更正通道。
+`bSuccessHit` 目前只在服务器命中判定时被置 `true`（`C_Character.cpp:441`），**C++ 里没有任何复位路径**。**定案：它是纯服务器侧的值，置位与复位都归服务器**——全项目只有一处使用（某一个技能用它判断是否进入技能的下一段），因此复位点与读取点同处：那门技能的服务器判定逻辑消费掉它之后随即复位，不引入新的复位时机。客户端只经 `Client_CorrectLocks` 接收。该锁不参与段键回滚，其权威值只来自这条更正通道（与 2.6.1 对 `bAttackInputLock` 的规则一致）。
 
 ### 5.7 超时检查接入
 
@@ -1660,12 +1667,14 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 
 | 类别 | 判定标准 | 处理 |
 | --- | --- | --- |
-| **时机类** | 通知的**发生时刻**本身对状态机有意义：连段推进（`AN_ChangeAttack`，**只切表现、不写段号**，见 2.4.4）、位移（`AN_MakeMove`）、碰撞框尺寸 / 偏移变更、状态切换到下一段的时点 | 两端都执行；在客户端它是"本地先行 + `Record*` 记录"的首写点 |
+| **时机类** | 通知的**发生时刻**本身对状态机有意义：连段推进（`AN_ChangeAttack`，**只切表现、不写段号**，见 2.4.4）、位移（`AN_MakeMove`）、碰撞框尺寸 / 偏移变更、状态切换到下一段的时点、**状态授予（`AN_ChangeState`——技能一/二写 `Armor`、奥义/通灵写 `Unbreakable`，见下）** | 两端都执行；在客户端它是"本地先行 + `Record*` 记录"的首写点 |
 | **纯权威类** | 通知只产生表现，不改变任何被复制 / 被校验的量：特效、音效、纯表现开关 | 改为 `HasAuthority()` 门控，由服务器触发后经 NetMulticast 分发；客户端不再自行执行 |
 
 > 判定标准只有一条：**"如果这个通知在客户端提前执行了，会不会让某个量进入一个服务器可能不同意的值？"** 会 → 时机类；不会 → 纯权威类。
 >
 > 注意 `Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 这类多播**兼具表现与状态**：表现部分（动画示意）按权威门控，状态部分（`bInProtectAnim`、`LaunchState`）必须保持两端一致，不能简单当作"纯表现"处理。
+
+> **`AN_ChangeState` 与技能键的关系（定案）**：它是唯一给 `CharacterState` 写霸体值的路径（`Armor` / `Unbreakable` / `Adamantine`；C++ 里无人写这三个值，取值由动画序列上的该通知给出），**写入不进技能键**——不写预测标记、不随技能键回滚。后果是本地霸体在"通知已跑、表里还是旧值"的窗口里会被采用规则第二行（无标记 → 写回本地）覆盖一次，直到服务器自己的同名通知运行、表带上霸体值才恢复；LAN 下窗口约一帧（不可见），`Net PktLag=100` 压测时可见。若将来要消除这个窗口，最小改动是让该通知在拥有者客户端的写入挂当前活跃键（`MarkReplicatedAttribute("Self.PS.CharacterState", GetActivePredictionKey())` 一行），代价是它不再是"只切表现"。
 
 **(b) 碰撞框本地先行。** 这是 2.5.2 命中预测的前置条件，单独列为验收项：
 
