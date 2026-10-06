@@ -27,7 +27,7 @@
 
 | 阶段 | 内容 | 改现有代码 | 依赖 | 结束时的状态 | 规模 |
 | --- | --- | --- | --- | --- | --- |
-| 一 | 预测组件 + 权威值表组件实现 | **否**（纯新增文件，外加一行友元） | 无 | 编译通过；工程行为零变化 | 大 |
+| 一 | 预测组件 + 权威值表组件实现 | **否**（纯新增文件，外加两行友元） | 无 | 编译通过；工程行为零变化 | 大 |
 | 二 | 接入前置（装上轮子，但一局零预测） | 是（逐项独立提交） | 一 | 表 / 锁 / 回执三条通道就位；对战表现与改造前一致 | 大 |
 | 三 | 逐功能切片（第一批） | 是（按切片划分） | 二 | 技能 / 替身 / 普攻 / 位移 / 碰撞框各自可开关、可单独验收 | 大 |
 | 四 | 命中预测（第二批） | 是 | 三（碰撞框切片） | 攻击方本地命中判定 + 敌方代理预测 | 中 |
@@ -43,7 +43,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 | 工具 | 侧 | 作用 | 何时建 |
 | --- | --- | --- | --- |
-| `Prediction.Log` | 客户端 | 打印建键 / 冻结 / 结算 / 回滚，以及采用规则命中了哪一行 | 阶段二 2.1 |
+| `Prediction.Log` | 客户端 | 打印建键 / 冻结 / 结算 / 回滚，以及采用规则命中了哪一行（分类 `LogPrediction` 已在阶段一 W1.2 建好） | 阶段二 2.1 |
 | `Prediction.Draw` | 客户端 | 屏上绘制：活跃键、标记表、三个锁值、表内字段 | 阶段二 2.1 |
 | `Prediction.Enabled` | 客户端 | 全局关闭：所有接入点退回原有路径 | 阶段二 2.1 |
 | `Prediction.Skill` / `Escape` / `Attack` / `Move` / `Box` / `Hit` | 客户端 | 逐片开关，在各自的输入点读取 | 随各切片 |
@@ -59,6 +59,33 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 ---
 
+## 源文件编码约定（写代码前先看这条）
+
+工程源文件是 **GBK（本机 ANSI 代码页 936）+ CRLF**，中文只出现在注释里。这条约定在阶段一 W1.2 第一次写中文日志文案时撞墙，结论如下。
+
+**根因**：UE 5.3 的 UBT **无条件**给 cl.exe 传 `/utf-8`（`Engine/Source/Programs/UnrealBuildTool/Platform/Windows/VCToolChain.cs:465`），紧跟着的 `:468` 是 `/wd4819`（屏蔽"字符无法在当前代码页表示"的警告）。于是编译器按 **UTF-8** 解码 GBK 源文件：
+
+- 中文出现在**注释**里 → 只是无效字节序列，警告被 `/wd4819` 压掉，**能编过**（所以 W1.1 一路绿灯）；
+- 中文出现在**字符串字面量**里 → 硬错误 `error C2001: 常量中有换行符`（W1.2 首踩，报在第一条中文 `UE_LOG` 文案上）。
+
+**定案（全英文日志）**：
+
+- 新增 / 修改的源文件保持 **GBK + CRLF**，与工程既有文件一致；
+- `UE_LOG` / `ensureMsgf` / `TEXT(...)` 等**字面量一律 ASCII 英文**，中文只写在注释里；
+- 工程里已有的 `UE_LOG(LogTemp, ...)` 不受影响（本来就没有中文）。
+
+**隔离验证**（同一份字面量，只换源文件编码，用同一套 cl.exe 直编）：
+
+| 源文件编码 | 结果 |
+| --- | --- |
+| GBK（工程现状） | `warning C4828` ×10 + `error C2001` —— 与工程构建报错完全一致 |
+| UTF-8 带 BOM | 通过，宽字符串解码正确 |
+| UTF-8 不带 BOM | 通过 |
+
+**被否掉的备选**：新文件转 UTF-8（带 BOM）——中文日志文案能保住，但工程内会并存两种编码；全工程转 UTF-8——编码统一且中文可用，但超出阶段一"除两行友元外不动现有文件"的边界，另找一次单独做。
+
+---
+
 ## 阶段一：预测组件（新增文件，零改动现有代码）
 
 ### 1.1 交付物
@@ -70,7 +97,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 `Naruto.Build.cs` **无需改动**（`FPredictionKey::NetSerialize` 需要的 `NetCore` 已在依赖列表里）。
 
-**硬约束**：除 1.3 的一行友元外，本阶段不修改任何现有文件；组件不挂载、不被调用，因此"编译通过"就等于"工程行为零变化"。
+**硬约束**：除 1.3 的两行友元外，本阶段不修改任何现有文件；组件不挂载、不被调用，因此"编译通过"就等于"工程行为零变化"。
 
 ### 1.2 工作包
 
@@ -78,27 +105,28 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | --- | --- | --- |
 | W1.1 结构体与枚举 | `FPredictionKey`（含 `NetSerialize` 与 `TStructOpsTypeTraits`）、`FAuthorityValueTable`、`FPredictionRecord`、`FStateLifecycleBinding` / `FStateChangeRecord` / `FPresentationRecord`、`FPredictionDelegates`、`EPredictionType` | 3.3.1 / 3.3.2 |
 | W1.2 键生命周期 | `CreatePredictionKey`（已有活跃键时断言）、`EndPredictionKey`（只冻结）、`BindStateLifecycle`、`FindPredictionRecord`、`IsPredictionKeyActive`、未结算缓冲池、`MaxPredictionRecords` 淘汰 | 2.3.1 / 2.3.2 / 3.4.2 |
-| W1.3 标记与采用 | `MarkReplicatedAttribute`、`ApplyAuthorityValueTable`（采用规则三行 + 逐字段清标记）、`IsReplicatedAttributePredicted`、两条防护规则、接管规则 | 2.7.2 / 3.4.3 |
-| W1.4 位置 | `RecordMoveBaseline`（一次性基线） | 2.5.1-C / 2.9 / 3.4.3 |
-| W1.5 记录与委托 | `RecordStateChange` / `RecordPresentation` / 两个 Get、委托表、按注册顺序执行 | 3.4.4 / 3.5 |
-| W1.6 结算与兜底 | `ResolvePrediction` → `ConfirmPrediction` / `RollbackPrediction`、`OnMulticastArrived`、`TickPredictionTimeout`、`GetAuthorityValue` | 2.11 / 3.4.5 |
-| W1.7 上下文 | `InitializePredictionContext`、`CanPredict`、`GetActivePredictionKey(ID)`、`FindComponentByClass` 绑定宿主上的权威值表组件 | 3.2 / 3.4.1 |
+| W1.3 权威值表组件 | `UC_AuthorityValueComponent`：构造函数（`SetIsReplicatedByDefault(true)`）、`GetLifetimeReplicatedProps`（只注册 `AuthorityValueTable`）、`PreReplication` 按宿主刷新表（PS 段 / Character 段）、`OnRep_AuthorityValueTable` + 表到达委托（供预测组件绑定）；同时落地 1.3 的两行友元 | 2.7.5 / 3.3.1 / 3.2 |
+| W1.4 标记与采用 | `MarkReplicatedAttribute`、`ApplyAuthorityValueTable`（采用规则三行 + 逐字段清标记）、`IsReplicatedAttributePredicted`、两条防护规则、接管规则 | 2.7.2 / 3.4.3 |
+| W1.5 位置 | `RecordMoveBaseline`（一次性基线） | 2.5.1-C / 2.9 / 3.4.3 |
+| W1.6 记录与委托 | `RecordStateChange` / `RecordPresentation` / 两个 Get、委托表、按注册顺序执行 | 3.4.4 / 3.5 |
+| W1.7 结算与兜底 | `ResolvePrediction` → `ConfirmPrediction` / `RollbackPrediction`、`OnMulticastArrived`、`TickPredictionTimeout`、`GetAuthorityValue` | 2.11 / 3.4.5 |
+| W1.8 上下文 | `InitializePredictionContext`、`CanPredict`、`GetActivePredictionKey(ID)`、`FindComponentByClass` 绑定宿主上的权威值表组件（并绑定其表到达委托）；清理向导桩代码（`bCanEverTick = false`、去掉 `TickComponent` / `BeginPlay` 覆写，见设计 3.2） | 3.2 / 3.4.1 |
 
 工作包之间只有编译期依赖，实现顺序可按表从上到下；每个工作包一次提交。
 
-### 1.3 访问边界（本阶段唯一的现有文件改动，一行）
+### 1.3 访问边界（本阶段唯一的现有文件改动，两行）
 
 组件需要读写的宿主成员里，有几个是 `private`：
 
 | 宿主 | 成员 | 现状 | 处理 |
 | --- | --- | --- | --- |
-| `AC_Character` | `LastEscapeTime`、`LastFirstSkillTime`、`LastSecondSkillTime`、`LastScrollTime`、`LastSummonTime` | `private`（`C_Character.h:336` 之后） | 加一行 `friend class UC_PredictionComponent;` |
+| `AC_Character` | `LastEscapeTime`、`LastFirstSkillTime`、`LastSecondSkillTime`、`LastScrollTime`、`LastSummonTime` | `private`（`C_Character.h:336` 之后） | 加两行：`friend class UC_PredictionComponent;`（本地先行读写）+ `friend class UC_AuthorityValueComponent;`（`PreReplication` 里从这几个时间戳读值填表，见设计 5.3） |
 | `AC_Character` | `bInProtectAnim` | `private`（`C_Character.h:303-304`） | 同上 |
 | `AC_PlayerState` | 全部相关字段（`Chakra` / `Attack` / `MySkill` / `CharacterState` / `HealthValue`） | 已是 `public` | 无需处理 |
 
 其余用到的成员（`Toward`、三个锁、`LaunchState`、`MyAttack` / `MyCState` / `MySkill`、四个 `*CDState`）都在 `public`。
 
-替代方案是不加友元、改为在宿主上补一组访问器——改动面更大，且同样要动现有文件，**不推荐**。**结论：加这一行友元**；提交时机可随阶段一一起（零行为），也可并入 2.1 的挂载提交。
+替代方案是不加友元、改为在宿主上补一组访问器——改动面更大，且同样要动现有文件，**不推荐**。**结论：加这两行友元**（第二行归权威值表组件：Character 段字段里 `LastEscapeTime` 与四个 CD 时间戳都是 `private`，只有 `Toward` 是 `public`）；提交时机可随阶段一一起（零行为），也可并入 2.1 的挂载提交。
 
 ### 1.4 验收
 
@@ -109,7 +137,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 ### 1.5 回退
 
-删除 4 个新文件与那一行友元即可，无残留引用。
+删除 4 个新文件与那两行友元即可，无残留引用。
 
 ---
 
@@ -301,11 +329,26 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | # | 事项 | 定案 | 落在哪 |
 | --- | --- | --- | --- |
 | 1 | 逐片开关用 cvar 还是组件上的 `UPROPERTY` | **cvar**：零接口改动（不碰设计 3.7 冻结表）、可在 console 里逐片排查 | 工具与调试开关 |
-| 2 | 组件访问宿主私有时戳：友元还是补访问器 | **加一行 `friend class UC_PredictionComponent;`**（零行为）；提交时机可并入 2.1 | 1.3 |
+| 2 | 组件访问宿主私有时戳：友元还是补访问器 | **加两行友元**（`UC_PredictionComponent` + `UC_AuthorityValueComponent`，零行为）；提交时机可并入 2.1 | 1.3 |
 | 3 | 阶段一是否引入自动化测试 | **先不引入**：值得测的分支都在"有宿主、有 RPC"之后 | 1.4 |
 | 4 | ~~奥义预扣 `Chakra` 不带键~~ | **撤销**：措辞有误——奥义输入照常创建预测键；"不带键"说的是 `Server_ChangeChakra` 这条 RPC。机制已定，不再是待定项 | 3.1 的"奥义"条 |
 | 5 | 替身客户端本地瞬移所需数据是否齐备（设计 5.4） | **在 3.2 开工第一步就先确认**；不齐则该片降级为不预测瞬移 | 3.2 |
 | 6 | 蓝图侧调用点清单（2.0） | **必须先盘完再动 2.7 / 3.3 / 3.4**——它是这三处的输入 | 2.0 |
+| 7 | `FPredictionRecord::EndTime` 记哪个时刻 | **冻结时刻**（`EndPredictionKey` 里写入）；设计 3.3.1 只给了字段、未说语义，该字段仅用于调试 | 3.3.1 / W1.2 |
+| 8 | 日志用哪个分类 | **新建 `LogPrediction`**（`C_PredictionComponent.h` 声明、`.cpp` 定义），阶段二的 `Prediction.Log` 沿用它 | 工具与调试开关 |
+| 9 | 汉字能不能进字符串字面量 | **不能**：字面量一律 ASCII 英文，汉字只进注释 —— 根因是 UBT 的 `/utf-8`，见"源文件编码约定" | 源文件编码约定 |
+| 10 | `ApplyAuthorityValueTable(const FAuthorityValueTable&)` 只有表、没有宿主身份（3.7 冻结签名），而预测组件要绑三个宿主的表到达委托 | **靠表的地址认宿主**：表就在已绑定组件的 `AuthorityValueTable` 成员上、客户端只有那一份（设计 3.3），"到达的表是哪个组件的成员"与"宿主是谁"是同一件事。三个宿主共用同一入口，W1.8 直接 `BindUObject`（**必须直接绑**，不能换成会拷贝表的 lambda）；认不出来时记 Warning | 3.2 / 3.3 / 3.4.3 / W1.4 |
+| 11 | `MarkReplicatedAttribute` 的忽略条件（设计 3.4.3 只写了 `KeyID == 0` / 名字为空） | **补三道守卫**：名字必须在表内字段集（设计 3.3.1 的字段 × 2.7.3 的前缀 = 16 个全名）、承载它的权威值表组件已绑定、键未结算 —— 三者缺一，标记都等不到权威值、进表就出不来（标记只由表到达或结算清除），还会用采用规则第一行把本地值永久挡住。**冻结但未结算的键照常接受标记**（设计没给这条限制，且冻结键仍在缓冲池里、仍会回滚） | 3.4.3 / 3.3 / W1.4 |
+| 12 | `Self.PS.HealthValue` 在表里、但设计 2.7.3 说"没有 `Self.PS.HealthValue`预测" | **两件事不冲突**：字段照常在表里、照常走采用规则（永远命中第二行，因为没人标记它）。它是设计 5.2(b) 摘除血量逐属性复制之后，拥有者客户端拿到自身血量的唯一通道 —— "不预测"说的是不写标记，不是不采用 | 2.7.3 / 5.2 / W1.4 |
+| 13 | `RecordMoveBaseline` 在"已捕获过基线"时返回什么（设计 3.4.3 只写了"无活跃键 → false"） | **返回 true，且不改写基线**：回滚要恢复的是本键位移**之前**的位置（第一次捕获的那个），改写会让第一段位移留在原地；返回 false 则等于让调用方跳过位移，而设计 2.9 的位移语句两端各自执行，跳过会造成本地动画与位置脱节再被校正拽回。Warning 照记 —— 多段位移本就该拆键，属于要暴露的接入错误 | 2.9 / 3.4.3 / W1.5 |
+| 14 | 两个记录接口的边界（设计 3.4.4 只写了"无活跃键忽略"与"冻结后忽略"） | **空名字忽略 + Warning**（沿用 3.4.3 给 `MarkReplicatedAttribute` 的同一条规则）；**`StateName` 是权威值表内字段时只记 Warning、仍照常记录** —— 该走标记却在记录是非复制数据的用法错误，但记录进来回滚委托照常恢复，丢掉反而少一次恢复；**空委托不入委托表**（3.5 的"传空委托即可"），入表的两条列表都只收已绑定的 | 3.4.4 / 3.5 / W1.6 |
+| 15 | `ConfirmedStatePacked`（2.11.1 说"用于客户端跟进时校正本地非复制状态变量"）在组件里没有出口 | **照 3.4.5 的步骤表执行，本组件不消费它**：Confirm 只做三件事（执行跟进委托、清非复制预测标记、清本键的可复制属性标记）。它出不去有两层原因：跟进委托按 3.5 是无参 `DECLARE_DELEGATE`（3.7 冻结），组件也无权写宿主的任意非复制变量。本包只把它记进 `LogPrediction` 的 Verbose 日志（调试可见）；真要消费得新增接口，按 3.7 的"扩展原则"追加版本号后再定 | 2.11.1 / 3.4.5 / W1.7 |
+| 16 | `OnMulticastArrived(MulticastName)` 按名字清标记，但 3.4.5 给的示例是 `"GrabLocation" / "ProtectedAnim" / "Gravity" / "BoxSize"`（多播自己的数据名），而标记表的键是带前缀的属性名（2.7.3） | **按字面实现：拿传进来的名字直接在标记表里查/删，查不到静默返回**（设计明写"找不到对应标记时静默返回"）。因此接入时传的必须是 `MarkReplicatedAttribute` 用过的那个名字；示例里的数据名只是"多播叫什么"的说明。理由：组件手上没有也不该有"多播名 → 属性名"的映射 —— 5.10 明确不给多播加键，多播与预测的配对本来就只有名字这一条线 | 3.4.5 / 2.11.3 / 5.10 / W1.7 |
+| 17 | 结算的收尾动作（设计 3.4.5 只说"键移出键表与缓冲池、记录保留"） | **收尾统一走内部 `FinishPredictionKey(KeyID, bConfirmed)`**，两条结算路径与超时路径共用。它多做两件设计没写但必须做的事：①**清掉该键的委托表条目** —— 3.5 只说"结算时取出执行"、没说保留，留着会让委托表随预测次数无限增长且存的都是失效绑定；②**`ActivePredictionKeyID` 归零** —— 超时可能落在**活跃**键上（回执丢失且没绑生命周期），那条路径不经过 `EndPredictionKey` | 3.5 / 3.4.5 / 2.3.2 / W1.7 |
+| 18 | `TickPredictionTimeout` 读生命周期绑定的状态值要 `AC_PlayerState*`，而缓存它的 `InitializePredictionContext` 排在 W1.8 | **本包不依赖 W1.8：直接从宿主 Pawn 取**（`Cast<AC_Character>(GetOwner())->GetPlayerState<AC_PlayerState>()`，`APawn::PlayerState` 无复制条件，客户端同样有），拿不到就本轮跳过、下一帧再试。计划 1.2 约定包与包之间只有**编译期**依赖，这条依赖不是；顺带让 W1.7 的代码自足 —— 不接上下文也能跑。W1.8 落地后可改用它缓存的引用，语义相同 | 3.4.2 / 3.4.5 / W1.7 |
+| 19 | `CanPredict` 的判据边界（3.4.1 写"组件已初始化、角色有效、PlayerState 有效"，3.2 的引用表里还有 Controller 与三个权威值表组件） | **判据 = 角色 + PlayerState + Controller 三者齐备，不含"权威值表组件是否已绑定"**。Controller 必须算进去：2.11.1 的回执走它、三个带键 RPC 之一也在它上面，缺了它连键都发不出去。权威值表组件**不算**：它没绑只影响该宿主的属性名，已由 3.4.3 的守卫按属性名拒绝并 Warning（已定事项 11）——把整片预测降级掉，比"少预测一个属性"的损失大得多 | 3.4.1 / 3.2 / W1.8 |
+| 20 | `InitializePredictionContext` 的失败边界（3.4.1 只说"false 表示角色 / PlayerState / Controller 缺失"，没提敌方） | **那三项缺一即返回 false；敌方 PlayerState 与其权威值表组件缺失不算失败**（本次留空、仍返回 true）。敌方按定义就是"可能还没生成 / 还没同步"的一方，把它算进有效性会让客户端在对手进场前整片降级。日志分两档：**对手本身不在 → Verbose**（常态），**对手在、但它没挂权威值表组件 → Warning**（配置错误，混在一起会看不见） | 3.4.1 / 2.7.5 / W1.8 |
+| 21 | `InitializePredictionContext` 可重复调用的保证（3.4.1 要求"PlayerState 后续到达可再次调用重试"） | **重绑即覆盖，重复调用安全** —— 已对照引擎源码核实：`TDelegate` 是单绑定（`DelegateBase.h:310-321` 的 `CreateDelegateInstance` 先析构旧实例、再就地构造新实例），所以重试不会累积绑定；UObject 版绑定持**弱引用**（`DelegateSignatureImpl.inl:500-503` 的注释明说），权威值表组件被销毁后不会悬空执行 | 3.4.1 / 3.2 / W1.8 |
 
 ---
 
