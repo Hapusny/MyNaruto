@@ -32,6 +32,11 @@ class NARUTO_API AC_Character : public ACharacter
 {
 	GENERATED_BODY()
 
+	//预测系统：预测组件要读写本类的私有时间戳与朝向，权威值表组件要在 PreReplication 里读它们填表
+	//（计划 1.3 / 设计 5.3，纯声明、零行为；这是接入预测系统唯一的现有文件改动）
+	friend class UC_PredictionComponent;
+	friend class UC_AuthorityValueComponent;
+
 public:
 
 	AC_Character();
