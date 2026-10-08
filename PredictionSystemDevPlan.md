@@ -147,27 +147,92 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 每项独立提交、独立验收；顺序按"风险从低到高"排。
 
-### 2.0 蓝图侧调用点盘点（调查项，先做）
+### 2.0 蓝图侧调用点盘点（已完成）——2.7 / 3.1 / 3.3 / 3.4 的输入
 
-`ChangeAttack` / `ChangeState` / `MakeMove` 三个 `BlueprintCallable` 函数在 C++ 里**没有任何调用点**（已核对：只有声明与实现），说明调用全部来自动画通知蓝图。接入前必须盘出：
+**产出归档**：`BlueprintSideCallSiteInventory.md`（逐资产、逐接口读实现流程）。本节只留三样：首轮三问的结论、调用点清单、由此产生的下游修正。首轮那张按资产名搜出来的挂载表已被 2.0.3 取代。
 
-- 哪些动画通知 / 蓝图调用了这三个函数、各自在什么时点；
-- `BP_FirstSkillEffect` / `BP_SecondSkillEffect` / `BP_FinalSkillEffect` / `BP_SummonEffect` 这类纯表现事件挂在哪些资产上；
-- 现有 `HasAuthority()` 判断与"两端都执行"的写法分别散落在哪些通知里（这是 2.7 通知拆分的输入）。
+#### 2.0.1 首轮三问的结论
 
-**首轮盘点（资产名搜索，已有结果）**：通知资产集中在 `Naruto/Content/Game/BP/Arena/Character/Base/AnimNotify/`——`AN_ChangeAttack`（连段推进）、`AN_MakeMove`（位移）、`AN_ChangeAttackBox`（碰撞框）、`AN_ChangeState`（状态授予）。挂载情况：
+1. **三个函数的调用点**：`ChangeAttack` / `ChangeState` / `MakeMove` 确无 C++ 调用点，路径都是 `AN_ChangeAttack` / `AN_ChangeState` / `AN_MakeMove` → `BPI_Character` → **实现在 `BP_Character`**（`BP_Menma` 只额外实现了 `I_HitJump`）。
+2. **纯表现事件挂在哪**：工程里**不存在** `BP_FirstSkillEffect` / `BP_SecondSkillEffect` / `BP_FinalSkillEffect` / `BP_SummonEffect` 这类资产——首轮按名字搜到的线索落空，不必再找。角色的纯表现只有三条通道，且都写在 `BP_Character` 的接口实现里：`I_SpawnSE`（蓝图内部函数 `SpawnBPSE`）、`I_PlaySound`（`PlaySound2D`）、`I_CameraShake`；生成物（秘卷 / 通灵魔法师、攻击体）另走 `I_Summon` → `I_SpawnAttacker`。
+3. **`HasAuthority()` 散落在哪**：**19 个通知资产里一个都没有**。通知的实现全是"直接调用 `BPI_Character` 同名接口"的纯转发，无额外逻辑、无判定；权威判定**全部集中在 `BP_Character` 的接口实现里**（`BPI_Character` 共 20 个函数，分布见 2.0.2）。→ **2.7 的拆分对象从"19 个通知资产"收敛为"一个资产的一组接口函数"**，这是本次盘点对 2.7 最大的简化。
 
-| 动画序列 | 挂的通知 | 写入的 `CharacterState` |
+#### 2.0.2 调用点清单（通知 → 现在做了什么 → 应归哪一类）
+
+「现行判定」一列取自调查报告：**权威** = 只在服务器执行；**本地控制** = 只在本地控制端执行；**无** = 两端各自执行。
+
+**时机类**（通知的发生时刻本身有意义，或它写的量会被服务器校验）：
+
+| 通知 | 接口 | 现在做了什么（`BP_Character` 实现） | 现行判定 |
+| --- | --- | --- | --- |
+| `AN_ChangeAttack` | `I_ChangeAttack` | 权威 → `ChangeAttack(Attack)`：写 `PS->Attack` / `MyAttack`；`attack == 0` 时收招归零（`Attack` / `MySkill` / `CharacterState` / 锁），非 0 时置 `bAttackInputLock` 并按 `TryTargetToward` 直调 `Server_ChangeToward_Implementation` | **权威** |
+| `AN_ChangeState` | `I_ChangeState` | 权威 → `ChangeState(State)`，写 `PS->CharacterState`（霸体：`Armor` / `Unbreakable`） | **权威** |
+| `AN_MakeMove` | `I_MakeMove` | 权威 → `MakeMove(Offset, 本地 TryTargetToward)`：按朝向与移动意图校正后 `AddActorLocalOffset` | **权威** |
+| `AN_PreInput` | `I_StartPreInput` | 权威 → `bPreInputLock = false`、`TryTargetToward = 0` | 权威 |
+| `AN_LockTargetToward` | `I_LockTargetToward` | 权威 → `TryTargetToward` 赋值 | 权威 |
+| `AN_ChangeDamageValue` | `I_ChangeDamageValue` | 权威 → 写造成伤害的 `Type` / `Effect` / `Value` / `Time` / `State`（非复制，命中判定用） | 权威 |
+| `AN_StartHitCheck` | `I_StartHitCheck` | 权威 → `SuccessHit = false` | 权威 |
+| `AN_SetGrab` / `AN_StopGrab` | `I_SetGrab` / `I_StopGrab` | 权威 → 设 / 清自身抓取点（决定 `Mult_ChangeGrabLocation` 落在哪） | 权威 |
+| `AN_ChangeAttackBox` / `AN_ChangePlayerBox` | `I_ChangeBox` | 本地控制 → `ServerChangeBox(Size, Offset, Type)`，服务器再 `Mult_ChangeBoxSize` 回来 | 本地控制 |
+| `AN_HitJump` | `I_HitJump`（`BP_Menma` 实现） | 权威且 `successHit` → `MySkill = 3`（派生技能）+ `I_GiveChakra` | 权威 |
+| `AN_ChangeGravity` | `I_ChangeGravity` | 按参数把角色移动组件 `GravityScale` 置 0 / 1——**本地物理量**，5.9a 的注要求与 `Mult_ChangeGravity` 的 `LaunchState` 一起看 | **无** |
+
+**纯权威类**（只产生表现或生成物，不写任何被校验的量）：
+
+| 通知 | 接口 | 现在做了什么 | 现行判定 |
+| --- | --- | --- | --- |
+| `AN_PlaySound` | `I_PlaySound` | `PlaySound2D` | **无 —— 两端各播一次（2.7 要改的就是它）** |
+| `AN_CameraShake` | `I_CameraShake` | 摄像头晃动 | **无 —— 同上** |
+| `AN_SpawnSE` | `I_SpawnSE` | 权威 → `SpawnBPSE(Offset, SEName, 本地 Toward)` | 权威（已合规，不动） |
+| `AN_SetOtherPauseState` | `I_SetOtherPauseState` | 权威 → `SetOtherPauseState(bool)`（暂停对手输入） | 权威（已合规，不动） |
+| `AN_SpawnAttacker` | `I_SpawnAttacker` | 权威 → 按类型 / 坐标 / `Size` 生成攻击体，设 `Owner` 为自身后 `StartUse` | 权威（已合规，不动） |
+| `AN_Summon` | `I_Summon` | 按 `SummonIndex` 转调 `I_SpawnAttacker`（0 秘卷查克拉 / 1 通灵魔法师） | 转发层无判定，**被调者权威**（等效已合规） |
+
+**没有通知的两个接口**（属属性预测，接入点在 C++ 侧）：
+
+| 接口 | 现在做了什么 | 现行判定 |
 | --- | --- | --- |
-| `Attack1`–`Attack5` | `AN_ChangeAttack` + `AN_MakeMove` | — |
-| `FirstSkill` / `SecondSkill` | `AN_ChangeAttack` + `AN_ChangeState` | `Armor` |
-| `FinalSkill`（奥义）/ `Summon` | `AN_ChangeAttack` + `AN_ChangeState` | `Unbreakable` |
-| `FirstSkillb` | `AN_ChangeAttack`（有 `Adamantine`，**无 `AN_ChangeState`**） | 来路待查 |
-| `Idle` / `Walk` | `AN_ChangeAttack` | — |
+| `I_GiveChakra` | `AddChakra()` → **直接调用 `Server_ChangeChakra_Implementation`**（`C_Character.cpp:154-159`，绕过 RPC） | 无判定 → 2.2 修直调、2.3 补服务器校验 |
+| `I_MakeDamage` | `BeDamaged(Type, Effect, Value, Time, State, GrabPoint)` | 无判定 → 写的是敌方属性，阶段四 |
 
-`AN_ChangeState` 调的是 `AC_Character::ChangeState`（`C_Character.cpp:207-210`，两端各自执行）——这是 `Armor` / `Unbreakable` / `Adamantine` 三个值在工程里的**唯一**写入路径（C++ 里无人写）。`FirstSkillb` 的 `Adamantine` 与各通知的 `HasAuthority()` 有无，**必须回编辑器逐个打开确认**——字符串搜索到此为止。
+> **攻击体侧（`AAN` / `BPI_AttackerBase`）不在 2.7 范围**：调查报告已注明，攻击体只在服务器生成、由复制同步到各端，所以其内部部分函数没有权威判断。命中的客户端判定属阶段四，届时单独盘一遍。
 
-产出：一张"资产 → 通知 → 现在做了什么 → 应归哪一类"的清单，写进本节或笔记。**没有这张清单，2.7 与切片 3.3 / 3.4 都无法开工。**
+#### 2.0.3 挂载矩阵（取代首轮表）
+
+按序列资产对通知类的引用逐条比对（只读，未改任何资产）：
+
+| 序列 | 挂载的通知 |
+| --- | --- |
+| `Attack1` / `Attack2` | `AN_ChangeAttack`、`AN_ChangeAttackBox`、`AN_ChangeDamageValue`、`AN_ChangePlayerBox`、`AN_LockTargetToward`、`AN_MakeMove`、`AN_PlaySound`、`AN_PreInput` |
+| `Attack3` | 同 `Attack1`，另加 `AN_CameraShake`、`AN_SpawnSE` |
+| `Attack4` | 同 `Attack1`，另加 `AN_CameraShake`、`AN_SetGrab`、`AN_StopGrab` |
+| `Attack5` | 同 `Attack3`，但**无** `AN_PreInput` |
+| `FirstSkill` | 13 个：`AN_ChangeAttack`、`AN_ChangeAttackBox`、`AN_ChangeDamageValue`、`AN_ChangePlayerBox`、`AN_ChangeState`、`AN_HitJump`、`AN_LockTargetToward`、`AN_MakeMove`、`AN_PlaySound`、`AN_SetGrab`、`AN_StartHitCheck`、`AN_StopGrab`、`AN_CameraShake` |
+| `FirstSkillb` | `AN_ChangeAttack`、`AN_ChangeAttackBox`、`AN_ChangeDamageValue`、`AN_ChangePlayerBox`、`AN_PlaySound`、`AN_SetGrab`、`AN_SpawnAttacker`、`AN_StopGrab` |
+| `SecondSkill` | `AN_ChangeAttack`、`AN_ChangeState`、`AN_PlaySound`、`AN_SpawnAttacker`、`AN_StopGrab` |
+| `FinalSkill`（奥义） | `AN_ChangeAttack`、`AN_ChangeGravity`、`AN_ChangePlayerBox`、`AN_ChangeState`、`AN_MakeMove`、`AN_PlaySound`、`AN_SetOtherPauseState`、`AN_SpawnAttacker` |
+| `Summon` | `AN_ChangeAttack`、`AN_ChangeState`、`AN_Summon` |
+| `Idle` | `AN_ChangeAttackBox`、`AN_ChangeDamageValue`、`AN_ChangePlayerBox`、`AN_PreInput` |
+| `Walk` | `AN_ChangeAttackBox`、`AN_ChangePlayerBox` |
+| `Grabbed` / `Launched` / `Staggered` | 无 |
+
+**对首轮表的更正**（只有一处，但会误导 3.3 / 3.4 的回归范围）：首轮记 `Idle` / `Walk` 挂 `AN_ChangeAttack`——**两条都没有挂**。也就是 `AN_ChangeAttack` 只出现在 5 段普攻、四个技能与 `FirstSkillb` 上（凡是要推进连段 / 收招的序列），`Idle` / `Walk` / 受击序列上没有任何连段推进。
+
+**顺带落定 `Adamantine`**：全工程只有 `FirstSkillb` 资产带这个取值，而该序列**没有挂** `AN_ChangeState`；`AN_ChangeState` 的挂载点只有四个，取值分别是 `FirstSkill` / `SecondSkill` = `Armor`、`FinalSkill` / `Summon` = `Unbreakable`。→ **`Adamantine` 当前没有任何写入路径**（首轮"来路待查"到此为止）：3.1 的霸体验收只需覆盖 `Armor` / `Unbreakable` 两个值。若仍要保留这个取值，需在编辑器里确认它是否曾被从 `FirstSkillb` 上删掉（该序列里 `AN_ChangeAttackBox` / `AN_SpawnAttacker` 等通知都在，独缺 `AN_ChangeState`）。
+
+#### 2.0.4 三处口径修正（2.7 / 3.1 / 3.3 / 3.4 开工前先读）
+
+① **三个接口的现行端别与设计 / 笔记的记载不一致**。调查报告写 `I_ChangeAttack` / `I_ChangeState` / `I_MakeMove` 都是**权威时**才执行（`C_Character.cpp` 的 `ChangeAttack` / `ChangeState` / `MakeMove` 内部确实没有判定），也就是**客户端现在这三条都不执行**；而设计 2.4.4、5.9a 与协同笔记把这三者记作"两端各自执行"。两处不可能同时成立。影响：
+
+- 2.7 的"时机类 = 两端都执行"对这三条而言，**客户端那一半现在并不存在**——它不是从现有实现里"拆"出来的，而是随预测接入**新加**的（3.1 / 3.3 / 3.4 各自的本地先行）；
+- 3.3 的"删掉蓝图里现有的段号写入"要先确认客户端究竟写过没有；
+- 2.7 与 3.1 里"本地霸体先被表覆盖一次再由服务器通知恢复"这条已知代价，**只在接入后才成立**。
+
+**动作**：2.7 开工第一步在编辑器里打开 `BP_Character` 的这三个接口函数确认一次（其余 16 个不受影响）。这是 2.0 留下的唯一未闭环项。
+
+② **`PS.CharacterState` 整条按属性预测接入**（裁决，见"已定事项"22）：它的取值里有四个是状态机的状态（`Staggered` / `Launched` / `Grabbed` / `Protected`，GDD 4.6.2），但**没有一个是客户端输入触发的**——霸体族来自 `AN_ChangeState`、受击 / 保护族来自服务器、`Normal` 来自收招。所以它不建键、不绑生命周期，一律"写标记 + 随权威值表采用 / 回滚"。**对 2.7 的直接含义**：`AN_ChangeState` 这一路在客户端接上时只写标记（时机类的通用做法），不要为它建键；本次盘点涉及的正是它写的那一族（霸体）。
+
+③ **`Adamantine` 无写入路径**，见 2.0.3 末段——3.1 的霸体验收范围据此收窄。
 
 ### 2.1 组件挂载、上下文初始化、超时接入
 
@@ -215,16 +280,17 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 ### 2.7 动画通知拆分（设计 5.9a）
 
-- 内容：按 2.0 的清单，把通知切成**时机类**（连段推进 `AN_ChangeAttack`、位移 `AN_MakeMove`、碰撞框变更、**状态授予 `AN_ChangeState`** —— 两端都执行）与**纯权威类**（特效、音效、纯表现开关 —— 改 `HasAuthority()` 门控，服务器触发后多播分发）。`AN_ChangeState` 的写入**不进技能键**（设计 5.9a 的定案）——本地霸体被表覆盖一次再由服务器通知恢复，是已知代价（约一帧，`Net PktLag` 下可见），不要当成本项失败。
-- 落点：**蓝图**（动画通知图表），可能涉及 `Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 这类"兼具表现与状态"的多播——表现部分按权威门控，状态部分必须保持两端一致。
-- 验收：特效 / 音效不再"两端各播一次"；位移与连段推进仍两端执行；判定标准只有一条——**"这个通知在客户端提前执行了，会不会让某个量进入服务器可能不同意的值？"**（设计 5.9a）。
+- 内容：按 2.0 的清单，把通知切成**时机类**（连段推进 `AN_ChangeAttack`、位移 `AN_MakeMove`、碰撞框变更、**状态授予 `AN_ChangeState`**——目标是两端都执行）与**纯权威类**（特效、音效、纯表现开关——改 `HasAuthority()` 门控，服务器触发后多播分发）。`AN_ChangeState` 的写入**不进技能键**（设计 5.9a 的定案），且客户端那一半按 2.0.4② 只写标记；本地霸体被表覆盖一次再由服务器通知恢复，是已知代价（约一帧，`Net PktLag` 下可见），不要当成本项失败。
+- **先读 2.0.4①**：时机类里 `AN_ChangeAttack` / `AN_ChangeState` / `AN_MakeMove` 这三条**现行是权威门控**（客户端那一半今天并不存在）。所以本项对这三位不是"把客户端那一半拆出来"，而是**补上**它——补上之后 3.1 / 3.3 / 3.4 的本地先行才有落点。开工第一步：在编辑器里打开 `BP_Character` 的这三个接口函数确认端别，确认结果回填 2.0.4①。
+- 落点：**蓝图**——不是 19 个通知资产（2.0.1 已确认它们只把 `AN_*` 转发给 `BPI_Character`），而是 `BP_Character` 里的接口实现（`BPI_Character` 共 20 个函数，其中 **18 个有通知资产**、是本项的对象；另 2 个 `I_GiveChakra` / `I_MakeDamage` 没有通知、属属性预测，见 2.0.2 末表。例外：`I_HitJump` 在 `BP_Menma`）：`HasAuthority()` 门控加在这里，时机类的客户端先行也加在这里，一次改一处、18 条都在同一个图集里。顺带处理 `Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 这类"兼具表现与状态"的多播——表现部分按权威门控，状态部分必须保持两端一致。
+- 验收：特效 / 音效不再"两端各播一次"；时机类在客户端提前执行后与服务器结果一致（位移、连段推进、霸体三方都对齐，客户端那一半由本项补齐）；判定标准只有一条——**"这个通知在客户端提前执行了，会不会让某个量进入服务器可能不同意的值？"**（设计 5.9a）。
 - 说明：这一项改的是现有实现，开关管不到，必须单独提交、单独回归。
 
 ### 2.8 阶段验收
 
 - 一局完整对战：无预测、无回执，表 / 锁两条通道工作，行为与表现与改造前一致。
 - `Prediction.Enabled` 0 / 1 两种状态行为一致（本阶段两者都等于"无预测"）。
-- 2.0 的蓝图清单归档进笔记。
+- 2.0 的蓝图清单归档在 `BlueprintSideCallSiteInventory.md`（盘点已完成，见 2.0）。
 
 ---
 
@@ -245,11 +311,11 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 - **范围**：先只做技能一（`MySkill = 1`），跑通后横向铺到技能二 / 奥义 / 秘卷与通灵（`4`，秘卷与通灵同为 `4`，按同一状态处理，`SummonIndex` 不进键判据，见设计 2.4.4）。
 - **落点**：`FirstSkill`（`C_Character.cpp:286-302`）、`Server_ChangeSkillState`（`C_PlayerController.cpp:149-155`）加 `FPredictionKey` 参数 + 回执。
-- **本地先行**：`Self.PS.MySkill`、`Self.PS.CharacterState`、`Self.PS.Chakra`（奥义）、`Self.Char.LastFirstSkillTime`（用 `GameState->GetServerWorldTimeSeconds()` 估算）；表现记录（技能动画、特效）。
+- **本地先行**：`Self.PS.MySkill`、`Self.PS.Chakra`（奥义）、`Self.Char.LastFirstSkillTime`（用 `GameState->GetServerWorldTimeSeconds()` 估算）；表现记录（技能动画、特效）。**不含 `Self.PS.CharacterState`**——技能输入不写它（写它的只有 `AN_ChangeState`，归 2.7），整条按属性预测接入，见"已定事项"22 与 2.0.4②。
 - **冻结**：`BindStateLifecycle(PK, "Self.PS.MySkill", 0)`——技能结束时自动冻结。
 - **已知差异**：CD 时间戳的本地值是"服务器世界时间估算值"，与服务器精确值不等，要等下一张表才写回（设计 2.7.2 竞态 1）。验收以"CD 状态（能否再次释放）服从服务器权威"为准，**不要求时间戳逐位相等**。
-- **奥义**：这次输入**和别的技能一样会创建预测键**（本地先行里已含 `MySkill` / `CharacterState` / `Chakra`，键由本次输入创建）。要注意的不是"奥义没键"，而是 **`Server_ChangeChakra(0)` 这条 RPC 不带键**——设计 3.4.2 只允许三个 RPC 带键，且禁止同一次输入发两条带键 RPC。所以本地预扣的 `Chakra` 标记登记在**本次输入的那个键**下，由该键的回执结算清除（Confirmed 清标记、不写回；Rejected 由下一张表写回）。服务器若没扣 Chakra，下一张表按"无标记 → 写回本地"把它拉回权威值。验收里专门加一条"奥义被拒后 Chakra 回到服务器值"。
-- **不进本键的东西**：技能霸体（`AN_ChangeState` 写的 `Armor` / `Unbreakable`）**不挂在技能键下**——归 2.7 的通知拆分（设计 5.9a 的定案）。本地霸体被表覆盖一次、再由服务器自己的通知恢复，是已知代价（约一帧），验收时不要当成本切片的失败。
+- **奥义**：这次输入**和别的技能一样会创建预测键**（本地先行里已含 `MySkill` / `Chakra`，键由本次输入创建）。要注意的不是"奥义没键"，而是 **`Server_ChangeChakra(0)` 这条 RPC 不带键**——设计 3.4.2 只允许三个 RPC 带键，且禁止同一次输入发两条带键 RPC。所以本地预扣的 `Chakra` 标记登记在**本次输入的那个键**下，由该键的回执结算清除（Confirmed 清标记、不写回；Rejected 由下一张表写回）。服务器若没扣 Chakra，下一张表按"无标记 → 写回本地"把它拉回权威值。验收里专门加一条"奥义被拒后 Chakra 回到服务器值"。
+- **不进本键的东西**：技能霸体（`AN_ChangeState` 写的 `Armor` / `Unbreakable`）**不挂在技能键下**——归 2.7 的通知拆分（设计 5.9a 的定案，客户端那一半按 2.0.4② 只写标记、不建键）。本地霸体被表覆盖一次、再由服务器自己的通知恢复，是已知代价（约一帧）——注意这条**接入后才成立**（见 2.0.4①），验收时不要当成本切片的失败。
 
 ### 3.2 切片 Escape（替身）
 
@@ -292,7 +358,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 ### 3.6 切片间的隔离与组合
 
 - **键不共享**：每个切片的键在各自输入点创建；同一时刻只允许一个活跃键（设计 2.3.2），换切片时先冻结旧键。
-- **标记不共享**：同名属性被新键接管时按设计 2.7.2 的接管规则处理（普攻段与技能都会写 `MySkill` / `CharacterState`，切换时必然互相接管）——这是切片间唯一的"共享面"，验收时要专门覆盖"技能进行中按普攻"这类交叉输入。
+- **标记不共享**：同名属性被新键接管时按设计 2.7.2 的接管规则处理。真正的共享面只有 `MySkill` 一个——技能输入、替身输入、收招的 `AN_ChangeAttack(0)` 都会写它（收招同时也写 `CharacterState`，但按 2.0.4② 它不建键、只写标记，接管规则随属性预测走）——验收时要专门覆盖"技能进行中按普攻"这类交叉输入。
 - **开关独立**：任一开关关闭后该切片完全退回原路径。
 - **组合验收**：三个切片同时开，打一局，确认回滚只影响本键登记项、无交叉回滚。
 
@@ -333,7 +399,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 3 | 阶段一是否引入自动化测试 | **先不引入**：值得测的分支都在"有宿主、有 RPC"之后 | 1.4 |
 | 4 | ~~奥义预扣 `Chakra` 不带键~~ | **撤销**：措辞有误——奥义输入照常创建预测键；"不带键"说的是 `Server_ChangeChakra` 这条 RPC。机制已定，不再是待定项 | 3.1 的"奥义"条 |
 | 5 | 替身客户端本地瞬移所需数据是否齐备（设计 5.4） | **在 3.2 开工第一步就先确认**；不齐则该片降级为不预测瞬移 | 3.2 |
-| 6 | 蓝图侧调用点清单（2.0） | **必须先盘完再动 2.7 / 3.3 / 3.4**——它是这三处的输入 | 2.0 |
+| 6 | 蓝图侧调用点清单（2.0） | **已盘完**：清单与分类进 2.0.2，产出归档 `BlueprintSideCallSiteInventory.md`。遗留一项待编辑器确认（三个接口的现行端别，见 2.0.4①） | 2.0 |
 | 7 | `FPredictionRecord::EndTime` 记哪个时刻 | **冻结时刻**（`EndPredictionKey` 里写入）；设计 3.3.1 只给了字段、未说语义，该字段仅用于调试 | 3.3.1 / W1.2 |
 | 8 | 日志用哪个分类 | **新建 `LogPrediction`**（`C_PredictionComponent.h` 声明、`.cpp` 定义），阶段二的 `Prediction.Log` 沿用它 | 工具与调试开关 |
 | 9 | 汉字能不能进字符串字面量 | **不能**：字面量一律 ASCII 英文，汉字只进注释 —— 根因是 UBT 的 `/utf-8`，见"源文件编码约定" | 源文件编码约定 |
@@ -349,6 +415,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 19 | `CanPredict` 的判据边界（3.4.1 写"组件已初始化、角色有效、PlayerState 有效"，3.2 的引用表里还有 Controller 与三个权威值表组件） | **判据 = 角色 + PlayerState + Controller 三者齐备，不含"权威值表组件是否已绑定"**。Controller 必须算进去：2.11.1 的回执走它、三个带键 RPC 之一也在它上面，缺了它连键都发不出去。权威值表组件**不算**：它没绑只影响该宿主的属性名，已由 3.4.3 的守卫按属性名拒绝并 Warning（已定事项 11）——把整片预测降级掉，比"少预测一个属性"的损失大得多 | 3.4.1 / 3.2 / W1.8 |
 | 20 | `InitializePredictionContext` 的失败边界（3.4.1 只说"false 表示角色 / PlayerState / Controller 缺失"，没提敌方） | **那三项缺一即返回 false；敌方 PlayerState 与其权威值表组件缺失不算失败**（本次留空、仍返回 true）。敌方按定义就是"可能还没生成 / 还没同步"的一方，把它算进有效性会让客户端在对手进场前整片降级。日志分两档：**对手本身不在 → Verbose**（常态），**对手在、但它没挂权威值表组件 → Warning**（配置错误，混在一起会看不见） | 3.4.1 / 2.7.5 / W1.8 |
 | 21 | `InitializePredictionContext` 可重复调用的保证（3.4.1 要求"PlayerState 后续到达可再次调用重试"） | **重绑即覆盖，重复调用安全** —— 已对照引擎源码核实：`TDelegate` 是单绑定（`DelegateBase.h:310-321` 的 `CreateDelegateInstance` 先析构旧实例、再就地构造新实例），所以重试不会累积绑定；UObject 版绑定持**弱引用**（`DelegateSignatureImpl.inl:500-503` 的注释明说），权威值表组件被销毁后不会悬空执行 | 3.4.1 / 3.2 / W1.8 |
+| 22 | `PS.CharacterState` 算状态预测还是属性预测（设计 2.4.1 把它列进"可复制状态变量"，设计 2.5.1 / 2.5.2 又把它列进属性预测走权威值表的那两行） | **整条按属性预测**。它的取值里有四个确实是状态机的状态（GDD 4.6.2 的 BeAttacked / Protected 读 `MyCState = Staggered` / `Launched` / `Grabbed` / `Protected`），但**没有一个取值由客户端输入触发**——霸体族（`Armor` / `Unbreakable` / `Adamantine`，GDD 的硬体 / 金刚体 / 霸体）由动画通知 `AN_ChangeState` 写、受击 / 保护族由服务器写（受击路径 / `Server_Escape`）、`Normal` 由收招写。既然不由输入触发，它就不建键、不 `BindStateLifecycle`，一律"写标记 + 随权威值表采用 / 回滚"（与 `Chakra` 同路）。与状态预测的差别只剩回滚的观感：受击 / 保护那四个取值回滚时要跟着把动画状态机切回去（设计 2.4.3） | 2.4.1 / 2.5.1 / 2.5.2 / 2.0.4② / 3.1 / 3.3 / 阶段四 |
 
 ---
 
@@ -358,7 +425,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | --- | --- | --- |
 | 权威值表接入（2.4） | **全局**：表坏 = 属性不同步 | 单独一笔提交、逐字段比对验收、随时 `revert` |
 | 段号写入点前移（3.3） | 普攻语义 | 开关管不到 → 单独提交；回归项就是连段与收招 |
-| 动画通知拆分（2.7） | 表现触发 | 开关管不到 → 单独提交；回归项是"特效不再双播"与"位移仍两端执行" |
+| 动画通知拆分（2.7） | 表现触发 | 开关管不到 → 单独提交；回归项是"特效不再双播"与"位移 / 连段推进 / 霸体在两端的执行一致"（客户端那一半是**新加**的，见 2.0.4①） |
 | 本地闸门与服务器判据不同源 | 出现"被拒绝的一段"、观感抖动 | 判据逐行对照（设计 2.4.4）；`ForceReject` 下逐片验收 |
 | 拒绝路径下本地锁不复位 | **输入卡死** | 2.5 的补发验收；3.3 的三连验收必须覆盖"拒绝后能立刻再按" |
 | 超时兜底失效 | 标记残留、本地值永久偏离 | `DropResolve` 验证 2.0s 回滚 |

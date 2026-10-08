@@ -498,7 +498,7 @@ PredictionSystemDesign.md 修订（`Attack` 无专属规则，采用规则表由
 
 AI 在计划里把奥义的 `Chakra` 预扣写成"不带键"，把「RPC 的参数」与「这次输入」混为一谈。开发者的原话：「奥义会进入奥义状态并创建预测键，怎么会不带键」。
 
-- 正确表述：**奥义输入与其它技能一样创建预测键**（本地先行 `MySkill` / `CharacterState` / `Chakra`）；"不带键"说的只是 `Server_ChangeChakra(0)` **这条 RPC**——3.4.2 只允许三个 RPC 带键，且禁止同一次输入发两条带键 RPC；
+- 正确表述：**奥义输入与其它技能一样创建预测键**（本地先行 `MySkill` / `Chakra`——本条初稿误把 `CharacterState` 一并列入，3.16 已订正；`CharacterState` 的写入路径是动画通知，见下条）；"不带键"说的只是 `Server_ChangeChakra(0)` **这条 RPC**——3.4.2 只允许三个 RPC 带键，且禁止同一次输入发两条带键 RPC；
 - 机制不变：本地预扣的 `Chakra` 标记登记在**本次输入的那个键**下，由该键的回执结算清除——设计 3.6.1 的技能伪码本来就是这么写的（`MarkReplicatedAttribute("Self.PS.Chakra", PK_001)`）。计划的措辞已订正，该条从"待定项"撤销。
 
 **同轮的实现层定案**（记在计划的"已定事项"）：逐片开关用 cvar 而非组件属性；组件读宿主私有时戳加一行 `friend class UC_PredictionComponent;`；阶段一先不引入自动化测试；替身切片开工第一步先确认本地瞬移数据齐备（不齐则该片降级为不预测瞬移）；蓝图调用点盘点（计划 2.0）必须先盘完再动通知拆分与普攻 / 位移切片。
@@ -628,3 +628,31 @@ W1.2 第一次写中文日志文案即编译失败：`error C2001: 常量中有�
 | 可选自动化测试 | **按已定事项 3 不引入** |
 
 **交付物清点**：新增 4 个文件（`C_PredictionComponent.h/.cpp`、`C_AuthorityValueComponent.h/.cpp`），现有文件只动 `C_Character.h`（5 行）。按 1.5 回退：删这 4 个文件与那 5 行即可，无残留引用。下一步是阶段二（2.0 蓝图侧调用点盘点先行）。
+
+---
+
+### 3.16 蓝图侧调用点盘点（计划 2.0）：三条函数链、`CharacterState` 的最终归属、一处未闭环
+
+**输入**：开发者指示"根据蓝图侧调查文档完成开发计划的 2.0"。蓝图侧的唯一事实来源是 `BlueprintSideCallSiteInventory.md`（19 个动画通知资产 + `BPI_Character` 的接口实现流程）；设计文档按 2.4 / 2.5 / 5.9a 引用，源码按已核验的行号引用。
+
+**复核**（盘点结论，全部进计划 2.0）：
+
+1. `ChangeAttack` / `ChangeState` / `MakeMove` 三条的调用链是 `AN_*`（动画通知资产）→ `BPI_Character`（蓝图接口）→ `BP_Character` 里的实现（唯一例外：`I_HitJump` 在 `BP_Menma`）。**19 个通知资产全是纯转发**，没有任何一条通知里带权限判定——所有门控都集中在 `BP_Character` 的接口实现里（`BPI_Character` 共 20 个函数：18 个有通知资产，`I_GiveChakra` / `I_MakeDamage` 没有）。
+2. 计划早先假设的 `BP_FirstSkillEffect` / `BP_SecondSkillEffect` / `BP_FinalSkillEffect` / `BP_SummonEffect` **不存在**；纯表现侧只有 `I_SpawnSE`（`SpawnBPSE`）、`I_PlaySound`（`PlaySound2D`）、`I_CameraShake` 三条。另有两个接口没有通知资产：`I_GiveChakra`（`AddChakra()` 直调 `Server_ChangeChakra_Implementation`）、`I_MakeDamage`（`BeDamaged(...)`）。
+3. 用只读的资产引用比对核了挂载矩阵（`AN_*_C` 类名出现在哪些动画序列里），纠正首轮一处：`Idle` / `Walk` **没有**挂 `AN_ChangeAttack`——该通知只出现在 5 段普攻、四个技能与 `FirstSkillb` 上（凡是要推进连段 / 收招的序列）。方法说明：只读地比对资产里的类名引用，不改资产；这也是本节唯一一次触碰 `.uasset`。
+4. `Adamantine` 的"来路待查"闭环：全工程只有 `FirstSkillb` 带这个取值，而该序列没挂 `AN_ChangeState`；该通知的挂载点只有四个（`FirstSkill` / `SecondSkill` = `Armor`，`FinalSkill` / `Summon` = `Unbreakable`）→ **`Adamantine` 当前没有任何写入路径**，3.1 的霸体验收只覆盖 `Armor` / `Unbreakable` 两个值。
+
+**裁决：`PS.CharacterState` 整条按属性预测接入**（三轮收敛，终裁来自开发者）
+
+第一轮 AI 依"它不影响动画状态机"把整条归进属性预测；第二轮开发者指出它有一部分确实是状态机的状态（GDD 4.6.2：BeAttacked / Protected 两个状态读 `MyCState = Staggered` / `Launched` / `Grabbed` / `Protected`）；第三轮开发者终裁：**那几个取值同样不由客户端输入触发**，所以整条按属性预测，不必拆。
+
+- 取值来源逐个查过：霸体族（`Armor` / `Unbreakable` / `Adamantine`）由 `AN_ChangeState` 写、受击 / 保护族由服务器写（受击路径 / `Server_Escape`）、`Normal` 由收招的 `ChangeAttack(0)` 写；技能输入五个函数只写 `MySkill`（3.14 已裁）。没有一个取值由输入触发 → 不建键、不 `BindStateLifecycle`，一律"写标记 + 随权威值表采用 / 回滚"（与 `Chakra` 同路）。
+- 与状态预测的差别只剩回滚的观感：受击 / 保护那四个取值回滚时要跟着把动画状态机切回去（设计 2.4.3）。
+- 连带订正（本轮已改）：设计 2.4.1 的"可复制状态变量"表删去 `CharacterState`（只留 `MySkill` / `Attack`）、2.4.2 步骤 2 的霸体括注、5.9a 定案里 `Adamantine` 一句；计划 3.1 的本地先行清单与奥义括注、2.7 的内容 / 落点 / 验收三条、风险总表相应一行。
+
+**未闭环项（唯一一处，记成待确认，不强判）**：调查报告写 `I_ChangeAttack` / `I_ChangeState` / `I_MakeMove` 都是**权威时**才执行（`C_Character.cpp:185-228` 这三个函数内部确实没有权限判定，蓝图侧也只有该文档为准），而设计 2.4.4 / 5.9a 把它们记作"两端各自执行"。两处不可能同时成立。已记入计划 2.0.4①：**2.7 开工第一步在编辑器里打开这三个接口函数确认端别**，其余 16 个不受影响。在此之前，2.7 对这三条的措辞一律写成"目标两端执行、客户端那一半是**新加**的"。
+
+**代价**：① 2.7 的改动面从"19 个通知资产"收窄到 `BP_Character` 一处（19 条接口都在同一个图集里，改起来是改一处），但回归项反而变多——时机类那三条的客户端半边是新加的，"接入后两端一致"这条验收没有现状基线可比，3.1 / 3.3 / 3.4 的相关验收都挂在接入之后；② `CharacterState` 按属性预测接入后，受击 / 保护四值的回滚要额外照看动画状态机（设计 2.4.3），这块的回归放阶段四。
+
+**结论**：计划 2.0 完成——清单、时机 / 纯权威分类、挂载矩阵、三处口径修正齐备，未改任何接口与结构。蓝图侧的事实来源自此统一为 `BlueprintSideCallSiteInventory.md`，涉及蓝图行为的分歧一律记"待编辑器确认"，不再翻 `.uasset` 二进制。下一步是 2.1（组件挂载、上下文初始化、超时接入）。
+

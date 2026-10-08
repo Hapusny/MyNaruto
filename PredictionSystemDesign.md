@@ -231,8 +231,10 @@
 
 | 类别 | 变量 | 处理方式 |
 | --- | --- | --- |
-| 可复制状态变量 | `AC_PlayerState::CharacterState`、`MySkill`、`Attack` | 本地先行修改 + 写预测标记；结算由**权威值表**兜底。其中 `Attack` 的本地写入点是**普攻输入点**（见 2.4.4） |
+| 可复制状态变量 | `AC_PlayerState::MySkill`、`Attack` | 本地先行修改 + 写预测标记；结算由**权威值表**兜底。其中 `Attack` 的本地写入点是**普攻输入点**（见 2.4.4） |
 | 非复制状态变量 | `AC_Character::LaunchState`、`bInProtectAnim` | 本地先行修改 + 写变化记录 + 注册委托；结算时跟进或回滚 |
+
+> **`AC_PlayerState::CharacterState` 不在状态预测里，整条按属性预测接入**（计划"已定事项"22）。它的取值虽然有一部分就是状态机的状态——GDD 4.6.2 的 BeAttacked / Protected 读 `MyCState = Staggered` / `Launched` / `Grabbed` / `Protected`——但**没有任何一个取值由客户端输入触发**：霸体族（`Armor` / `Unbreakable` / `Adamantine`）由动画通知 `AN_ChangeState` 写、受击 / 保护族由服务器写（受击路径 / `Server_Escape`）、`Normal` 由收招的 `ChangeAttack(0)` 写。既然不由输入触发，它就不建键、不 `BindStateLifecycle`，一律"写标记 + 随权威值表采用 / 回滚"（与 `Chakra` 同路，见 2.5.1）；差别只剩回滚的观感——受击 / 保护那四个取值回滚时要跟着把动画状态机切回去（见 2.4.3）。
 
 > **`AC_Character` 上的 `MyAttack` / `MyCState` / `MySkill` 不作为预测对象。** 它们是 `GetInformation()` 每帧从 `AC_PlayerState` 派生的本地镜像（`C_Character.cpp:580-588`），预测直接作用于 `AC_PlayerState` 的复制属性，镜像自动跟随。把它们也列为预测对象会造成同帧覆盖与重复回滚。
 
@@ -257,7 +259,7 @@
 **示例：玩家释放技能一**
 
 1. 本地生成预测键 `PK_001`（**每个技能取值都是一个独立状态，各自一个键**：技能一 / 技能二 / 奥义 / 秘卷与通灵——秘卷与通灵同为 `4`，动画相同、按同一状态处理，见 2.4.4），并绑定生命周期 `BindStateLifecycle(PK_001, "Self.PS.MySkill", 0)`（技能结束时自动冻结）。
-2. `AC_PlayerState::MySkill` 本地置为「技能一」；标记 `Self.PS.MySkill` 正在被 `PK_001` 预测。（技能附带的霸体状态——技能一 / 技能二的 `Armor`、奥义 / 通灵的 `Unbreakable`——由动画通知 `AN_ChangeState` 在两端各自写入，**不是**输入点的本地先行，见 5.9a。）
+2. `AC_PlayerState::MySkill` 本地置为「技能一」；标记 `Self.PS.MySkill` 正在被 `PK_001` 预测。（技能附带的霸体状态——技能一 / 技能二的 `Armor`、奥义 / 通灵的 `Unbreakable`——由动画通知 `AN_ChangeState` 写，**不是**输入点的本地先行，见 5.9a。该通知现行是权威门控、只有服务器在写；客户端那一半随时机类接入时**新加**，且按 2.4.1 的裁决只写标记、不建键——见计划 2.0.4①。）
 3. 动画状态机读取后立即播放技能动画。
 4. 服务器处理 `Server_ChangeSkillState` 后，**权威值表到达** → 更新权威值表、清除预测标记、采用权威值（**不再依赖 `REPNOTIFY_Always`**，见 2.7.1）。
 5. `Client_ResolvePrediction` 回执到达 → 结算 `PK_001`：确认则执行跟进委托；拒绝则执行回滚委托，**非复制状态变量按变化记录恢复旧值、可复制属性从权威值表恢复**，重新按权威值驱动动画。
@@ -1674,7 +1676,7 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 >
 > 注意 `Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 这类多播**兼具表现与状态**：表现部分（动画示意）按权威门控，状态部分（`bInProtectAnim`、`LaunchState`）必须保持两端一致，不能简单当作"纯表现"处理。
 
-> **`AN_ChangeState` 与技能键的关系（定案）**：它是唯一给 `CharacterState` 写霸体值的路径（`Armor` / `Unbreakable` / `Adamantine`；C++ 里无人写这三个值，取值由动画序列上的该通知给出），**写入不进技能键**——不写预测标记、不随技能键回滚。后果是本地霸体在"通知已跑、表里还是旧值"的窗口里会被采用规则第二行（无标记 → 写回本地）覆盖一次，直到服务器自己的同名通知运行、表带上霸体值才恢复；LAN 下窗口约一帧（不可见），`Net PktLag=100` 压测时可见。若将来要消除这个窗口，最小改动是让该通知在拥有者客户端的写入挂当前活跃键（`MarkReplicatedAttribute("Self.PS.CharacterState", GetActivePredictionKey())` 一行），代价是它不再是"只切表现"。
+> **`AN_ChangeState` 与技能键的关系（定案）**：它是唯一给 `CharacterState` 写霸体值的路径（`Armor` / `Unbreakable`；C++ 里无人写这两个值，取值由动画序列上的该通知给出。`Adamantine` 在工程里**没有任何写入路径**——该通知只挂在 `FirstSkill` / `SecondSkill`（`Armor`）与 `FinalSkill` / `Summon`（`Unbreakable`）四个序列上，见计划 2.0.3），**写入不进技能键**——不写预测标记、不随技能键回滚。后果是本地霸体在"通知已跑、表里还是旧值"的窗口里会被采用规则第二行（无标记 → 写回本地）覆盖一次，直到服务器自己的同名通知运行、表带上霸体值才恢复；LAN 下窗口约一帧（不可见），`Net PktLag=100` 压测时可见。若将来要消除这个窗口，最小改动是让该通知在拥有者客户端的写入挂当前活跃键（`MarkReplicatedAttribute("Self.PS.CharacterState", GetActivePredictionKey())` 一行），代价是它不再是"只切表现"。
 
 **(b) 碰撞框本地先行。** 这是 2.5.2 命中预测的前置条件，单独列为验收项：
 
