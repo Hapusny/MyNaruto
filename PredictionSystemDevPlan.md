@@ -56,6 +56,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - 每个开关的**关**必须是安全态（等价于"未接入"）；`ForceReject` / `DropResolve` 只在非 Shipping 构建里编译。
 - 开关用 cvar 而非组件配置属性：不改动设计 3.7 冻结表里的任何签名，且能在 console 里逐片排查。
 - 这些 cvar **长期保留**，它们是以后线上排障的唯一手段。
+- **2.1 已落地**：三个开关都是文件级 cvar，`extern` 声明在 `C_PredictionComponent.h`（不新增类接口，设计 3.7 不动）。`Prediction.Log 1` 把 `LogPrediction` 抬到 Verbose；`Prediction.Draw` 只画**本地控制**的那个角色，绘制借 `TickPredictionTimeout` 的开头进来（组件自己不 Tick，见设计 3.2），默认关；`Prediction.Enabled` 默认开，**只被接入点读取，不进 `CanPredict()`**——那条判据问的是"上下文是否有效"（已定事项 19），与"这次要不要预测"是两件事。
 
 ---
 
@@ -238,14 +239,60 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 - 内容：`AC_Character` 构造函数 `CreateDefaultSubobject`；`BeginPlay` 调 `InitializePredictionContext`（失败可重试）；`Tick` 中调 `TickPredictionTimeout`；建 `Prediction.Log` / `Draw` / `Enabled`。
 - 落点：`C_Character` 构造函数、`BeginPlay`、`Tick`（**必须放在 `C_Character.cpp:456-459` 的 PS / GameState 空指针早退之后**，否则数据未就绪期间超时检查静默停摆，见设计 5.7）。
-- 验收：屏上看到上下文有效、权威值表组件已绑定；键表与记录表恒为空；跑一局无 Warning 刷屏（"键不存在"一类竞态本就不该记 Warning，见设计 3.4.5）。
+- 验收：屏上看到上下文有效、权威值表组件已绑定（**后半句见已定事项 23：挂载在 2.4，本项跑完时绘制显示 `authority: no`**）；键表与记录表恒为空；跑一局无 Warning 刷屏（"键不存在"一类竞态本就不该记 Warning，见设计 3.4.5）。
+
+**已落地（2026-10-09）**，编译通过（`NarutoEditor Win64 Development`，0 警告），实机验收通过（上下文有效、四张计数表恒空、无 Warning 刷屏）。
+
+对原项目的修改——两个现有文件，共 +43 行，无删除、无签名改动：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_Character.h` | `:17` | 前向声明 `class UC_PredictionComponent;` |
+| | `:47-50` | 新增 `virtual void BeginPlay() override;`（原类没有覆写 BeginPlay） |
+| | `:76-79` | 新增 `UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<UC_PredictionComponent> PredictionComponent;` |
+| `C_Character.cpp` | `:22` | `#include "C_PredictionComponent.h"` |
+| | `:66-67` | 构造函数末尾 `CreateDefaultSubobject<UC_PredictionComponent>(TEXT("PredictionComponent"))`，不 `SetupAttachment`（设计 3.2） |
+| | `:74-85` | 新增 `AC_Character::BeginPlay`：调 `InitializePredictionContext()`，不判返回值（客户端这一次多半失败，属正常中间态） |
+| | `:478-492` | `Tick` 中，紧跟 PS / GameState 空指针早退之后：上下文无效则每帧重试一次初始化 → `TickPredictionTimeout(DeltaTime)` |
+
+阶段一新建文件上的扩展（不是原项目内容，一并记录）：`C_PredictionComponent.h` 加 `#include "HAL/IConsoleManager.h"`、三个开关的 `extern` 声明（`:22-24`）、私有 `DrawPredictionDebug()`（`:333`）；`C_PredictionComponent.cpp` 加三个 cvar 定义（`:22 / :29 / :43`）与 `DrawPredictionDebug` 实现（`:721`），并在 `TickPredictionTimeout` 开头调用（`:818`）。设计 3.7 冻结表里的签名与语义未动：开关是文件级 cvar，绘制是私有函数。
 
 ### 2.2 既有问题修复（设计 5.8 全表）
 
-- 内容：判空、直接调用改为走 RPC、补权限语义、`bPreInputLock` 复位点改由 C++ 接管、`Tick` 里的 `Mult_ChangeGrabLocation` 明确触发条件。
-- 落点：`C_Character.cpp:154-159`（`AddChakra`）、`MyInitialize`、`:185-205`（`ChangeAttack`）、`:207-210`（`ChangeState`）、`:212-228`（`MakeMove`）、`:510` 附近，以及 `ChangeAttack` 里对 `Server_ChangeToward_Implementation` 的直调。
-- 注意：**只做与预测无关的修复**，不引入闸门、不写标记、不建键（设计 5.8 末注：单独提交、单独验证，不要与预测逻辑混在一起）。`Attack`（`:274-277`）本阶段只补判空，两道闸门留到切片 3.3。
-- 验收：与修复前行为一致（除被修掉的错误路径）；`bPreInputLock` 的复位点要确认动画蓝图里旧的复位节点已移除，否则会出现"一处置位、两处复位"。
+- 内容：判空、直接调用改为走 RPC、补权限语义、`bPreInputLock` 的写入改由 C++ 接管（见已定事项 24）、`Tick` 里的 `Mult_ChangeGrabLocation` 明确触发条件。
+- 落点：`C_Character.cpp` 的 `AddChakra`（设计 5.8 的旧行号 `:154-159`，2.1 之后下移为 `:171-176`）、`MyInitialize`（`:111`）、`ChangeAttack`（旧 `:185-205` → `:202-222`）、`ChangeState`（旧 `:207-210` → `:224-227`）、`MakeMove`（旧 `:212-228` → `:229-245`）、`Tick` 里的 `Mult_ChangeGrabLocation`（旧 `:510` → `:543`），以及 `ChangeAttack` 里对 `Server_ChangeToward_Implementation` 的直调（`:216-217`）。
+- 注意：**只做与预测无关的修复**，不引入闸门、不写标记、不建键（设计 5.8 末注：单独提交、单独验证，不要与预测逻辑混在一起）。`Attack`（旧 `:274-277` → `:291-294`）本阶段只补判空，两道闸门留到切片 3.3。
+- **蓝图侧动作（本包唯一一处，由开发者执行）**：`BP_Character` 的 `I_StartPreInput` 权威分支，把直接 `Set bPreInputLock` 的节点换成调用新增的 `AC_Character::StartPreInput()`；`TryTargetToward = 0` 一起挪进该函数，蓝图侧不再保留这两条写。顺序必须是"C++ 函数先落地并编译通过 → 再改蓝图"，否则蓝图找不到函数。`AN_PreInput` 通知与 `I_StartPreInput` 接口都保留。
+- 验收：与修复前行为一致（除被修掉的错误路径）；蓝图改完后连段 / 预输入手感与改动前逐段一致——窗口位置一动没动（见已定事项 24）。
+
+**已落地（2026-10-09）**，编译通过（`NarutoEditor Win64 Development`，0 警告），**实机验收通过**（开局朝向、连段与收招、技能 / 秘卷 / 通灵、抓取跟随、受击 / 击飞 / 保护各一次；预输入窗口位置与改动前一致）。蓝图侧那一处（`I_StartPreInput` 的 `Set bPreInputLock` 换成调用 `StartPreInput()`）由开发者执行完成。
+
+对原项目的修改——两个现有文件，共 +52 行 / −8 行（其中 13 行是新增函数、8 行是头文件声明与注释），无删除函数、无签名改动：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_Character.h` | `:180-186` | 新增 `UFUNCTION(BlueprintCallable) void StartPreInput();`（已定事项 24） |
+| `C_Character.cpp` | `:111-124` | `MyInitialize`：两处 `Server_ChangeToward_Implementation` → `Server_ChangeToward`（走 RPC）。本函数在客户端上跑（`OnRep_PlayerState` / `OnTeamChanged`），原来只改本地那一份 `Toward` |
+| | `:173-182` | `AddChakra`：`Cast<AC_PlayerController>(Controller)` 判空后改走 `Server_ChangeChakra`。原来 `Controller` 为空会直接解引用空指针，且直调 `_Implementation` |
+| | `:208-228` | `ChangeAttack`：加 `PS` 判空（原来第一行就写 `PS->Attack`）；两处 `Server_ChangeToward_Implementation` → `Server_ChangeToward` |
+| | `:232-242` | `ChangeState`：加 `if (!HasAuthority())return;` 与 `PS` 判空（原来一行裸写 `GetPlayerState<AC_PlayerState>()->CharacterState = target;`） |
+| | `:244-263` | `MakeMove`：加权限语义注释（"两端各自执行"），**无行为改动** |
+| | `:266-277` | 新增 `AC_Character::StartPreInput()`：`bPreInputLock = false` + `TryTargetToward` 归零，即原蓝图那两条 Set |
+| | `:461-470` | `Server_Attack_Implementation`：`PS` 判空提到解引用之前（原来 `:433` 先读 `PS->CharacterState`、`:434` 才判 `PS`）；随之去掉 `if (PS && …)` 里的冗余 `PS &&` |
+| | `:576-581` | `Tick` 里 `Mult_ChangeGrabLocation`：把触发条件与频率写明确，抽出 `GrabLocation` 局部量。**无行为改动** |
+
+三处原本会崩的空指针（`AddChakra` 的 `Controller`、`ChangeAttack` / `ChangeState` 的 `PS`）是 5.8 表"判空"的实际收益。
+
+**5.8 表内本包未落地的行，及理由**：
+
+| 行 | 处理 |
+| --- | --- |
+| `AC_Character::Attack` 的"本阶段只补判空"（旧 `:274-277` → `:291-294`） | 函数体只有一行 `Server_Attack()`，**没有可判空的对象**；这一行的判空落在它到达的 `Server_Attack_Implementation`（上表 `:461-470`），那里才是真正解引用 `PS` 的地方 |
+| `AC_Character::Tick` 里 `Mult_ChangeGrabLocation` 的"建议只在抓取状态变化时调一次" | **未采纳该建议**：被抓角色要靠这条多播连续跟随会随抓取者移动的抓取点，改成"状态变化时一次"会让跟随失效。本包只把触发条件与频率写明确（设计原话是"建议"，不是定案）——**开发者 2026-10-09 裁定：按此执行，见已定事项 25** |
+| `ChangeAttack` 的"段号写入点前移 / `attack == 0` 按端区分" | 属切片 3.3（段号写入点前移），本包按"只做与预测无关的修复"不动 |
+| `Attack` 的两道闸门 | 属切片 3.3 |
+| `MakeMove` 的"客户端先行 + `RecordMoveBaseline`" | 属 2.7 / 3.4（动画通知拆分与位移切片） |
+| 服务器校验（P3）那行 | 属 2.3 |
 
 ### 2.3 服务器校验（设计 5.1）
 
@@ -253,6 +300,37 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - 落点：`C_PlayerController.cpp:67-73`（`Server_ChangeChakra`）与 `:133-155`（`Server_ChangeAttackState` / `Server_ChangeCharacterState` / `Server_ChangeSkillState`）。
 - 验收：正常操作行为不变；用调试命令**故意在不可行时机发请求**（如 CD 未好、状态不是 `Normal`/`Protected`）→ 服务器拒绝且不写值。
 - 说明：此刻还没有任何键，拒绝表现为"世界状态不变"，客户端看不到任何变化——这正是这一项的验收方式。
+
+**已落地（2026-10-09）**，编译通过（`NarutoEditor Win64 Development`，0 警告）。落点里写的 `:67-73` / `:133-155` 是动手前的位置，改动后见下表。
+
+对原项目的修改——三个现有文件，共 +81 行 / −6 行（其中 `C_PlayerController.cpp` 全部是本包改动，另两个文件里的其余行属 2.1 / 2.2），无删除函数、无签名改动：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_PlayerController.cpp` | `:67-87` | `Server_ChangeChakra`：裸赋值 → 三条判据（助增 +1 / 替身 −1 / 奥义清零），三条之外一律拒绝（已定事项 27） |
+| | `:147-157` | `Server_ChangeAttackState`：**保持原样**，只加注释——本函数在工程里没有调用者（见下表） |
+| | `:159-168` | `Server_ChangeCharacterState`：同样保持原样，只加注释 |
+| | `:170-223` | `Server_ChangeSkillState`：状态判据（`Normal` / `Protected`，五个输入函数共有）+ 按取值判 CD / 查克拉（1 / 2 / 4 / 5），取值不在客户端请求集内一律拒绝；被接受时写下服务器侧的权威 CD 时间戳（已定事项 28） |
+| `C_Character.h` | `:41-44` | 新增 `friend class AC_PlayerController;`——上一步要在 `C_Character` 的私有时间戳上落笔 |
+| `C_Character.cpp` | `:381-384` | `FinalSkill`：两条 RPC 调序——技能请求排在查克拉清零之前（已定事项 27） |
+
+阶段一新建文件上的扩展：`C_PredictionComponent.cpp:1350-1395` 新增两条调试命令 `Prediction.DebugSkill <1|2|4|5>` / `Prediction.DebugChakra <0..4>`（`FAutoConsoleCommandWithWorldAndArgs`，取本实例的本地 PlayerController，绕过客户端的本地先行判定直接发请求；2.6 的调试工具同放这里）。命令在敲它的那个实例里生效——局域网要测哪个客户端，就在哪个窗口的控制台里敲。
+
+**验收步骤**：
+
+1. 正常打一局：普攻 / 替身 / 一技能 / 二技能 / 秘卷 / 通灵 / 奥义各一次，行为与 2.2 之后一致（新增判据在正常路径上全部通过）。
+2. 服务器拒绝：一技能还在 CD 时敲 `Prediction.DebugSkill 1` → 服务器拒绝，`MySkill` 不变、屏上无任何变化（此刻还没有键，拒绝只表现为"世界状态不变"）。
+3. 奥义判据：查克拉不满时敲 `Prediction.DebugSkill 5` → 拒绝；再敲 `Prediction.DebugChakra 0` → 也拒绝（`MySkill` 不是 5），查克拉不掉——"被拒的奥义不白扣查克拉"。
+4. 非法取值：`Prediction.DebugSkill 3` / `7` → 拒绝（不在客户端请求集内）。
+
+**一处过渡期现象（2.4 落地后消失）**：客户端在输入函数里仍先写自己那一份 CD 时间戳。请求被服务器拒绝时，客户端这一份已经开始计时——冷却条会先亮起来，直到 2.4 的权威值表把服务器的值下发下来才被纠正。这是预期的，也正是下一条要接权威值表的原因。
+
+**设计 5.1 点名的四条 RPC 里，本包只给两条加了判据**：
+
+| RPC | 处理 |
+| --- | --- |
+| `Server_ChangeAttackState` | 工程里**没有任何调用者**：C++ 侧无调用点、也没有 `BlueprintCallable`，蓝图侧盘点（`BlueprintSideCallSiteInventory.md`）把 `BP_PlayerController` 标为"无关"。没有客户端判据可搬；段号写入点前移属 3.3，它的校验与去向届时一并处理（已定事项 29） |
+| `Server_ChangeCharacterState` | 同样没有调用者；且 `CharacterState` 按已定事项 22 是服务器写、不由客户端输入触发，客户端本就无从发起这个请求。保留原样，等 3.x 决定删或改（已定事项 29） |
 
 ### 2.4 权威值表接入（设计 5.2 / 5.3）——**本阶段风险最高的一项**
 
@@ -265,6 +343,40 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
   2. UI（血量 / 查克拉 / CD 倒计时）、动画状态机、移动拦截照常；
   3. 跑一局完整对战，无属性不同步。
 - 回退：整项一笔提交，`revert` 即回到逐属性复制。
+
+**已落地（2026-10-09）**，编译通过（`NarutoEditor Win64 Development`，0 警告）。落点里 `C_PlayerState.cpp:22-31` 是动手前的位置，改动后见下表。
+
+对原项目的修改——四个现有文件，本包增量共 +56 行 / −14 行（`C_Character.*` 里的其余行属 2.1 / 2.2 / 2.3）；阶段一新建文件 `C_PredictionComponent.cpp` 另加 21 行（验收工具）。无删除函数、无签名改动：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_PlayerState.h` | `:12` | 前向声明 `UC_AuthorityValueComponent` |
+| | `:59-63` | 新增组件成员 `UPROPERTY(VisibleAnywhere, BlueprintReadOnly)` |
+| | `:79-96` | 五个被预测属性去掉 `Replicated` 说明符：`HealthValue` / `Chakra` / `Attack` / `MySkill` / `CharacterState`（已定事项 30） |
+| `C_PlayerState.cpp` | `:10-15` | 构造函数：`NetUpdateFrequency = 100.f` 就地加注"必须保留"，新增 `CreateDefaultSubobject<UC_AuthorityValueComponent>` |
+| | `:28-34` | 删五条 `DOREPLIFETIME`（`CharacterState` / `Attack` / `HealthValue` / `Chakra` / `MySkill`），`Team` 保留 |
+| `C_Character.h` | `:18` / `:87-91` | 前向声明 + 组件成员 |
+| | `:116-119` | `Toward` 去掉 `Replicated`（`BlueprintReadWrite` 保留） |
+| | `:376-380` | `LastEscapeTime` 去掉 `Replicated`、改为 `UPROPERTY()`；四个 CD 时间戳**原样不动**（连 `UPROPERTY` 都没有，进表不需要动，设计 5.3） |
+| `C_Character.cpp` | `:23` | 加 `#include "C_AuthorityValueComponent.h"` |
+| | `:70-71` | 构造函数：紧随预测组件 `CreateDefaultSubobject<UC_AuthorityValueComponent>` |
+| | `:205-210` | 删两条 `DOREPLIFETIME`（`Toward` / `LastEscapeTime`），函数体保留 |
+| | `:129-138` | `MyInitialize` 末尾补一次 `InitializePredictionContext()`（已定事项 32） |
+
+阶段一新建文件上的扩展：`C_PredictionComponent.cpp:782-832`——`Prediction.Draw` 的每条权威值表下面再加一行宿主的真实属性（`live`，`FColor::Cyan`），供下面验收 1 逐字段对照。**没有新增公开接口**：设计 3.7 冻结了两个组件的接口、扩展原则要求"必须新增接口时追加版本号"，而验收只需要把已有的私有绘制加两行（已定事项 31）。
+
+**蓝图侧：本包不需要改蓝图。** 组件在 C++ 构造函数里创建，蓝图子类自动继承——编辑器里 `BP_Character` 的组件树会多出一个继承来的 `AuthorityValueComponent`（任何玩家状态 / 角色的蓝图子类同理）。
+
+**验收**（对应上面三条）：
+
+1. 分别在服务器窗口与客户端窗口执行 `Prediction.Draw 1`：
+   - `refs:` 行的 `authority:` 三项应全为 `yes`（`selfPS` / `selfChar` / `enemyPS`）——2.1 顺延过来的那一条验收到此关闭（已定事项 23），此后不再出现"敌方 PS 没有权威值表组件"的 Warning；
+   - 每条表下面那行 `live` 应与表逐字段相等（此刻无预测、无标记，表到达后恒走采用规则第二行）；
+   - 把两个窗口的 `live` 行对起来看（含 `enemyPS` 那张表）：客户端 == 服务器。
+2. UI（血量 / 查克拉 / CD 倒计时）、动画状态机、移动拦截照常：受击 / 替身 / 一技能 / 二技能 / 秘卷 / 通灵 / 奥义各一次，途中盯血条、查克拉条、五个冷却与朝向。
+3. 跑一局完整对战（打到分出胜负或时间耗尽），全程无属性不同步。
+
+**一处语义说明**：摘除之后，这批属性在客户端上的权威写者只剩表的采用规则；但客户端代码今天仍会在本地写其中几个（`ChangeAttack` 写 `PS->Attack` / `PS->MySkill`、`AC_PlayerController::PlayerGetDamage` 写 `CharacterState` 等，两端各自执行）。阶段二没有预测键，采用规则恒走第二行：这些本地写会在下一次表到达时被服务器的值覆盖——与摘除前的逐属性复制同一条件（引擎只在值变化时下发）。到阶段三给它们加上预测标记后，采用规则的第一行 / 第三行才开始起作用（设计 2.7.2）。
 
 ### 2.5 锁更正通道（设计 5.5 / 5.6）
 
@@ -416,6 +528,16 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 20 | `InitializePredictionContext` 的失败边界（3.4.1 只说"false 表示角色 / PlayerState / Controller 缺失"，没提敌方） | **那三项缺一即返回 false；敌方 PlayerState 与其权威值表组件缺失不算失败**（本次留空、仍返回 true）。敌方按定义就是"可能还没生成 / 还没同步"的一方，把它算进有效性会让客户端在对手进场前整片降级。日志分两档：**对手本身不在 → Verbose**（常态），**对手在、但它没挂权威值表组件 → Warning**（配置错误，混在一起会看不见） | 3.4.1 / 2.7.5 / W1.8 |
 | 21 | `InitializePredictionContext` 可重复调用的保证（3.4.1 要求"PlayerState 后续到达可再次调用重试"） | **重绑即覆盖，重复调用安全** —— 已对照引擎源码核实：`TDelegate` 是单绑定（`DelegateBase.h:310-321` 的 `CreateDelegateInstance` 先析构旧实例、再就地构造新实例），所以重试不会累积绑定；UObject 版绑定持**弱引用**（`DelegateSignatureImpl.inl:500-503` 的注释明说），权威值表组件被销毁后不会悬空执行 | 3.4.1 / 3.2 / W1.8 |
 | 22 | `PS.CharacterState` 算状态预测还是属性预测（设计 2.4.1 把它列进"可复制状态变量"，设计 2.5.1 / 2.5.2 又把它列进属性预测走权威值表的那两行） | **整条按属性预测**。它的取值里有四个确实是状态机的状态（GDD 4.6.2 的 BeAttacked / Protected 读 `MyCState = Staggered` / `Launched` / `Grabbed` / `Protected`），但**没有一个取值由客户端输入触发**——霸体族（`Armor` / `Unbreakable` / `Adamantine`，GDD 的硬体 / 金刚体 / 霸体）由动画通知 `AN_ChangeState` 写、受击 / 保护族由服务器写（受击路径 / `Server_Escape`）、`Normal` 由收招写。既然不由输入触发，它就不建键、不 `BindStateLifecycle`，一律"写标记 + 随权威值表采用 / 回滚"（与 `Chakra` 同路）。与状态预测的差别只剩回滚的观感：受击 / 保护那四个取值回滚时要跟着把动画状态机切回去（设计 2.4.3） | 2.4.1 / 2.5.1 / 2.5.2 / 2.0.4② / 3.1 / 3.3 / 阶段四 |
+| 23 | 2.1 验收写"屏上看到…权威值表组件已绑定"，而挂载动作写在 2.4 与设计 5.2(a)——两处不可能同时成立 | **按计划字面：2.1 只挂预测组件，三个权威值表组件留到 2.4 挂**（计划自己定了"凡有歧义以设计文档为准"，设计 5.2(a) 把挂载与"属性改走表"放在同一节）。2.1 验收该条顺延到 2.4 一起走；2.4 之前 `Prediction.Draw` 显示 `authority: no`，且每次上下文初始化会报一条"敌方 PS 没有权威值表组件"的 Warning（真实配置缺失，2.4 挂上后消失）。这样 2.4 仍是"挂载 + 摘除逐属性复制"一整笔，`revert` 一笔回到原状 | 2.1 / 2.4 |
+| 24 | `bPreInputLock` 的复位点：设计 5.8 的定案写"在 `AN_ChangeAttack` 的连段推进点置位/复位"，但蓝图 `I_StartPreInput` 置 `false` 的语义是**打开预输入窗口**（开窗后窗口内的一次输入由 `Server_Attack_Implementation` 置回 `true`，推进点 `AN_ChangeAttack` → `ChangeAttack` 消费它决定连段变换），它不是残留的复位 | **位置与语义都不动，只把写入者从蓝图搬进 C++**（开发者 2026-10-09 口径）：新增 `AC_Character::StartPreInput()`（`UFUNCTION(BlueprintCallable)`），函数体就是今天蓝图那两条（`bPreInputLock = false`、`TryTargetToward = 0`）；`BP_Character` 的 `I_StartPreInput` 权威分支改为调用它。**不在推进点加复位**——5.8 那句按"C++ 里必须有一个置 false 的位置、蓝图不能是唯一写者"落地：2.7 之后拥有者客户端也跑 `ChangeAttack`，而蓝图那条 authority 分支在客户端不执行，标志会永远卡在初值 `true`（`C_Character.h:185`）。`TryTargetToward` 非复制、不进预测系统（设计 1.1.2-06 / 2.9），随同搬入只是换实现位置，行为不变 | 5.8 / 2.2 / 2.7 |
+| 25 | 设计 5.8 对 `Tick` 里 `Mult_ChangeGrabLocation` 的处理栏写"（建议只在抓取状态变化时调一次）"，而现行代码是**连续跟随**：被抓期间每帧比对"自己 vs 抓取点"，不一致就发一次多播把两端一起挪过去 | **不采纳那条建议，保持连续跟随**（开发者 2026-10-09 裁定"按给出的建议执行"，即沿用本包给出的建议）：抓取点随抓取者的动画移动，改成"状态变化时一次"会让被抓角色不再跟随、抓取表现直接失效。该多播是 `Reliable`，发送频率由"抓取点是否移动"决定——2.2 只把这个条件与频率写明确（`C_Character.cpp:576-581`），行为不变。要限频是另一个决定，暂不做 | 5.8 / 2.2 |
+| 26 | 秘卷与通灵共用请求值 4（两者的 `MySkill` 都是 4、动画相同），服务器侧怎么分辨是哪一个 | **读 `Char->SummonIndex`**：`C_Character.cpp` 的两个输入函数在发请求前先发 `Server_SetSummonIndex(0 秘卷 / 1 通灵)`。这两条请求跨 Actor（角色 / PlayerController），设计 2.11.4 已说明跨 Actor 不保证保序——但服务器侧的 `I_Summon` 本来就要读 `SummonIndex` 决定生成哪一个，这个"先到"要求是原代码就有的，本包没有新增假设。CD 判据与时间戳写入按同一条件分支，两者不会分叉 | 5.1 / 2.11.4 / 2.3 |
+| 27 | 奥义的服务器判据是"满查克拉"（`Chakra == 4`），而客户端 `FinalSkill` 原来把 `Server_ChangeChakra(0)` 排在 `Server_ChangeSkillState(5)` **之前**——照搬判据会让每一次奥义都被拒 | **客户端两条 RPC 调序**（技能请求在前、清零在后；同一 Actor 上的可靠 RPC，UE 保证按序到达，设计 2.11.4），**并在 `Server_ChangeChakra` 的清零路径上加一条 `PS->MySkill == 5`**：奥义请求本身被拒（状态不合法、或服务器侧查克拉已变）时，紧随其后的清零也一并拒绝——被拒的奥义不白扣查克拉。此刻还没有回滚（2.5 / 2.6），这条是拒绝路径唯一的兜底 | 5.1 / 2.11.4 / 2.3 |
+| 28 | 四个 CD 时间戳的服务器侧写入算 2.3 还是 2.4（权威值表在 2.4 才建） | **放 2.3，与判据同包**：服务器自己的 CD 判据读的就是这四个时间戳，不写它们恒为 0、判据永远是"没在冷却"，刚加上的拒绝路径形同虚设；而且 2.4 的采用规则会把服务器那一份下发给客户端，服务器侧若是 0 就会**把客户端正在跑的冷却抹掉**。客户端在输入函数里也记一份，那是本地先行值，2.4 起被权威值纠正 | 5.1 / 5.3 / 2.3 / 2.4 |
+| 29 | 设计 5.1 点名的四条 RPC 里，`Server_ChangeAttackState` / `Server_ChangeCharacterState` 在工程里没有任何调用者，没有客户端判据可搬 | **本包不动，只加注释**（写明为什么没有判据）。段号写入点前移属 3.3、`CharacterState` 按已定事项 22 由服务器写，两者的校验与去向都等到那时处理；现在凭空给它们编判据会锁死 3.3 的选择 | 5.1 / 2.3 / 3.3 |
+| 30 | 摘除逐属性复制时，`Replicated` 说明符去不去掉——设计 5.2b 只对 `AC_Character` 写了"可一并去掉"，`AC_PlayerState` 那一栏只说"UPROPERTY 声明保留" | **两处都去掉**（共七个属性）。说明符留着而 `DOREPLIFETIME` 已删，等于"名义上复制、实际不注册"：读代码的人无从判断哪个是真的，也没法靠声明看出"这批属性只走表"。`UPROPERTY` 一律保留（反射 / GC / 蓝图读写照旧）；`Team` 的 `ReplicatedUsing = OnRep_Team` 与四个 CD 时间戳都不动 | 5.2b / 2.4 |
+| 31 | 2.4 的验收 1 要"客户端打印表，与服务器打印真实属性"逐字段比，验收工具放哪 | **扩展已有的私有 `Prediction.Draw`**（`DrawPredictionDebug`，2.1 建的），每条表下面加一行宿主的 `live` 值。理由：设计 3.7 冻结了两个组件的接口、扩展原则写明"必须新增接口时追加版本号"，而 `Prediction.Draw` 是私有成员、加行不改任何签名；且"表 vs 真实属性"在同一屏、同一实例上直读，不用跨窗口手抄。也替 2.6 的调试工具定了去向——同放这里 | 2.4 / 3.7 / 2.1 |
+| 32 | 敌方 PS 的绑定只在 `InitializePredictionContext` 里做，而 Tick 的重试门槛是 `CanPredict()`（只看自身三项）——自身到齐后不再重试，首次初始化若早于 `Team` 或早于对手 PS 出现，`EnemyPSAuthority` 会一直空着 | **在 `AC_Character::MyInitialize` 末尾补一次 `InitializePredictionContext()`**：该函数正是"PS 与 Team 都就绪"的时刻（服务器在 `SpawnPawnToPlayer` 里、客户端在 `OnRep_PlayerState` / `OnTeamChanged` 里），重复调用安全（重绑即覆盖，已定事项 21），不需要新接口。本工程的生成顺序（`AssignTeams` 先 `SetTeam` 再 `SpawnPawnToPlayer`，且要求两名玩家都在场）让两端都能在这一刻找齐对手；不补这一手的话，`Prediction.Draw` 的 `enemyPS` 会一直显示 `no`，阶段三的 `Enemy.PS.*` 预测也无从落地 | 3.4.1 / 2.1 / 2.4 |
 
 ---
 
