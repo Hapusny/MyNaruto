@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "HAL/IConsoleManager.h"		// TAutoConsoleVariable（下面的调试开关）
 #include "C_AuthorityValueComponent.h"	// FAuthorityValueTable 定义在此，预测组件按设计 3.2 包含它
 #include "C_PredictionComponent.generated.h"
 
@@ -13,6 +14,14 @@ class AC_PlayerController;
 
 // 预测系统的日志分类：组件与各接入点共用（阶段二 2.1 的 Prediction.Log 开关作用于此分类）
 DECLARE_LOG_CATEGORY_EXTERN(LogPrediction, Log, All);
+
+// ---- 调试开关（计划"工具与调试开关"表；阶段二 2.1 建）----
+// 用 cvar 而不是组件属性：不改设计 3.7 冻结表里的任何签名，且能在 console 里逐片排查。
+// 约定：每个开关的"关"都必须是安全态，等价于"未接入"（计划 0 节的"开关能退什么"）。
+// 这三个长期保留，是以后线上排障的手段；逐片开关（Prediction.Skill / Attack / ...）随各切片再建。
+extern TAutoConsoleVariable<int32> CVarPredictionEnabled;	// Prediction.Enabled：全局关闭，各接入点退回原有路径
+extern TAutoConsoleVariable<int32> CVarPredictionLog;		// Prediction.Log：把 LogPrediction 抬到 Verbose
+extern TAutoConsoleVariable<int32> CVarPredictionDraw;		// Prediction.Draw：屏上绘制键 / 标记 / 锁 / 表
 
 // 预测类型（设计 3.3.2）
 UENUM(BlueprintType)
@@ -316,6 +325,12 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UC_AuthorityValueComponent> SelfPSAuthority;		// 己方 PlayerState 上的（Self.PS.*）
 	UPROPERTY(Transient) TObjectPtr<UC_AuthorityValueComponent> SelfCharacterAuthority;	// 己方 Character 上的（Self.Char.*）
 	UPROPERTY(Transient) TObjectPtr<UC_AuthorityValueComponent> EnemyPSAuthority;		// 敌方 PlayerState 上的（Enemy.PS.*）
+
+	// 内部：Prediction.Draw 开着时把预测状态画到屏上（阶段二 2.1）。
+	// 组件自己不 Tick（设计 3.2），绘制借用每帧唯一的那次调用 —— TickPredictionTimeout 的开头。
+	// 开关关着时本函数第一行就返回，对 TickPredictionTimeout 的语义零影响。
+	// 只画本地控制的那个角色：一场对战里两个角色各有一个预测组件，都画会互相盖住
+	void DrawPredictionDebug() const;
 
 	// 内部：统一取世界时间。超时判定必须用世界时间，不能累加 DeltaTime（设计 2.3.1 实现约束）
 	float GetPredictionTimeSeconds() const;

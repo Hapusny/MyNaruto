@@ -6,10 +6,46 @@
 #include "C_Character.h"
 #include "C_PlayerState.h"
 #include "C_PlayerController.h"
+#include "Engine/Engine.h"			// GEngine->AddOnScreenDebugMessage（Prediction.Draw）
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 
 DEFINE_LOG_CATEGORY(LogPrediction);
+
+// ---- 调试开关（计划"工具与调试开关"表，阶段二 2.1 建）----
+// 声明在头文件里（extern），各接入点连同 C_Character.cpp 一起读；用 cvar 而不是组件属性，
+// 是为了不动设计 3.7 的冻结接口，并且能在 console 里逐片排查。
+//
+// Prediction.Enabled 只被【接入点】读取，不参与 CanPredict()：那条判据问的是"上下文是否有效"
+//（已定事项 19：角色 + PlayerState + Controller），与"这次要不要预测"是两件事 —— 后者由开关在
+// 各输入点自己决定（计划 3.0 第 4 步：开关关掉 = 完全走原路径）。默认开
+TAutoConsoleVariable<int32> CVarPredictionEnabled(
+	TEXT("Prediction.Enabled"),
+	1,
+	TEXT("Prediction system master switch. 0 = off: every call site falls back to the original path (no key, no marker, plain RPC)."),
+	ECVF_Default);
+
+// 屏上绘制预测状态。只在本地控制的角色上画（见 DrawPredictionDebug）
+TAutoConsoleVariable<int32> CVarPredictionDraw(
+	TEXT("Prediction.Draw"),
+	0,
+	TEXT("Draw the prediction state of the locally controlled character: context, keys, markers, locks and authority value tables."),
+	ECVF_Default);
+
+// Prediction.Log 1 → LogPrediction 抬到 Verbose：建键 / 冻结 / 结算 / 回滚与采用规则命中行都记在 Verbose 上。
+// 分类本身已按 Log 注册（阶段一 W1.2），这里只调运行时的工作详细度（FLogCategoryBase::SetVerbosity
+// 会按编译期详细度钳制，本分类的编译期值是 All，Verbose 打得开）
+static void OnPredictionLogChanged(IConsoleVariable* Variable)
+{
+	LogPrediction.SetVerbosity((Variable != nullptr && Variable->GetInt() != 0) ? ELogVerbosity::Verbose : ELogVerbosity::Log);
+}
+
+TAutoConsoleVariable<int32> CVarPredictionLog(
+	TEXT("Prediction.Log"),
+	0,
+	TEXT("Set the LogPrediction category to Verbose (1) or back to Log (0)."),
+	FConsoleVariableDelegate::CreateStatic(&OnPredictionLogChanged),
+	ECVF_Default);
 
 namespace
 {
@@ -680,8 +716,128 @@ void UC_PredictionComponent::OnMulticastArrived(FName MulticastName)
 	}
 }
 
+// ---- 调试绘制（阶段二 2.1，Prediction.Draw）----
+
+void UC_PredictionComponent::DrawPredictionDebug() const
+{
+	if (GEngine == nullptr || CVarPredictionDraw.GetValueOnGameThread() == 0)
+	{
+		return;
+	}
+
+	// 只画本地控制的那一个：一场对战里两个角色各挂一个预测组件，都画会互相盖住。
+	// 服务器上的模拟代理同样被这一条挡掉（计划"工具与调试开关"表把 Prediction.Draw 归在客户端）
+	const AC_Character* Character = SelfCharacter.Get();
+	if (Character == nullptr || !Character->IsLocallyControlled())
+	{
+		return;
+	}
+
+	// 固定 key 段 + 短时长：每帧覆盖同一条，不会像 key = -1 那样越堆越多。
+	// 时长不能给 0 —— 引擎按 CurrentTimeDisplayed >= TimeToDisplay 当场丢弃那条消息（UnrealEngine.cpp:12224）
+	constexpr int32 MessageKeyBase = 0x7100;
+	int32 LineIndex = 0;
+	auto DrawLine = [&LineIndex](const FColor& Color, const FString& Text)
+	{
+		GEngine->AddOnScreenDebugMessage(MessageKeyBase + LineIndex, 0.1f, Color, Text);
+		++LineIndex;
+	};
+	auto Bound = [](const UObject* Object) { return Object != nullptr ? TEXT("yes") : TEXT("no"); };
+
+	// 一、上下文：CanPredict 的三项（角色 / PlayerState / Controller）与三个权威值表组件的绑定情况
+	const bool bContextValid = CanPredict();
+	DrawLine(bContextValid ? FColor::Green : FColor::Red, FString::Printf(
+		TEXT("[Prediction] %s   context: %s"), *Character->GetName(), bContextValid ? TEXT("valid") : TEXT("INVALID")));
+
+	DrawLine(FColor::White, FString::Printf(
+		TEXT("  refs: char=%s ps=%s ctrl=%s | authority: selfPS=%s selfChar=%s enemyPS=%s"),
+		Bound(SelfCharacter.Get()), Bound(SelfPlayerState.Get()), Bound(SelfController.Get()),
+		Bound(SelfPSAuthority.Get()), Bound(SelfCharacterAuthority.Get()), Bound(EnemyPSAuthority.Get())));
+
+	// 二、键表 / 记录表 / 缓冲池：阶段二全程应恒为"active=0 keys=0 records=0 pending=0"
+	DrawLine(FColor::White, FString::Printf(
+		TEXT("  keys: active=%u keys=%d records=%d pending=%d timeout=%.1fs"),
+		ActivePredictionKeyID, PredictionKeys.Num(), PredictionRecords.Num(), PendingKeys.Num(), PredictionTimeout));
+
+	// 三、预测标记表（设计 3.3 / 2.7.2）：阶段二应恒为 (none)
+	if (PredictionMarkers.Num() == 0)
+	{
+		DrawLine(FColor::Silver, TEXT("  markers: (none)"));
+	}
+	else
+	{
+		FString MarkerText = TEXT("  markers:");
+		for (const TPair<FName, uint32>& Pair : PredictionMarkers)
+		{
+			MarkerText += FString::Printf(TEXT(" %s=%u"), *Pair.Key.ToString(), Pair.Value);
+		}
+		DrawLine(FColor::Yellow, MarkerText);
+	}
+
+	// 四、三个锁（设计 2.8 的位域约定）——它们不走预测键，是独立通道
+	DrawLine(FColor::White, FString::Printf(
+		TEXT("  locks: bAttackInputLock=%d bPreInputLock=%d bSuccessHit=%d"),
+		Character->bAttackInputLock ? 1 : 0, Character->bPreInputLock ? 1 : 0, Character->bSuccessHit ? 1 : 0));
+
+	// 五、三个宿主上的权威值表（设计 2.7.5 的挂载点表）——未绑定时明说，便于区分"没挂"与"值不对"。
+	// 计划 2.4 的验收 1：每条表下面再画一行宿主上的真实属性值。此刻没有预测、没有标记，
+	// 表到达后恒走采用规则第二行（写回本地），所以同一实例里这两行应当逐字段相等；
+	// 把两个窗口的 live 行对起来看，就是"客户端收到的权威值 == 服务器上的真实属性"
+	auto DrawPSTable = [&DrawLine](const TCHAR* Label, const UC_AuthorityValueComponent* Authority, const AC_PlayerState* LivePS)
+	{
+		if (Authority == nullptr)
+		{
+			DrawLine(FColor::Silver, FString::Printf(TEXT("  %s table: (not bound)"), Label));
+			return;
+		}
+		const FAuthorityValueTable& Table = Authority->AuthorityValueTable;
+		DrawLine(FColor::White, FString::Printf(
+			TEXT("  %s table: HP=%.1f Chakra=%d Attack=%d MySkill=%d CharacterState=%d"),
+			Label, Table.HealthValue, Table.Chakra, Table.Attack, Table.MySkill, static_cast<int32>(Table.CharacterState)));
+		if (LivePS == nullptr)
+		{
+			DrawLine(FColor::Silver, FString::Printf(TEXT("  %s live : (host missing)"), Label));
+			return;
+		}
+		DrawLine(FColor::Cyan, FString::Printf(
+			TEXT("  %s live : HP=%.1f Chakra=%d Attack=%d MySkill=%d CharacterState=%d"),
+			Label, LivePS->HealthValue, LivePS->Chakra, LivePS->Attack, LivePS->MySkill, static_cast<int32>(LivePS->CharacterState)));
+	};
+	auto DrawCharacterTable = [&DrawLine](const UC_AuthorityValueComponent* Authority, const AC_Character* LiveCharacter)
+	{
+		if (Authority == nullptr)
+		{
+			DrawLine(FColor::Silver, TEXT("  selfChar table: (not bound)"));
+			return;
+		}
+		const FAuthorityValueTable& Table = Authority->AuthorityValueTable;
+		DrawLine(FColor::White, FString::Printf(
+			TEXT("  selfChar table: Toward=%d LastEscape=%.2f LastFirst=%.2f LastSecond=%.2f LastScroll=%.2f LastSummon=%.2f"),
+			Table.Toward ? 1 : 0, Table.LastEscapeTime, Table.LastFirstSkillTime, Table.LastSecondSkillTime,
+			Table.LastScrollTime, Table.LastSummonTime));
+		if (LiveCharacter == nullptr)
+		{
+			DrawLine(FColor::Silver, TEXT("  selfChar live : (host missing)"));
+			return;
+		}
+		// 后五个是 AC_Character 的私有成员：本类是它的友元（计划 1.3），可以直接读
+		DrawLine(FColor::Cyan, FString::Printf(
+			TEXT("  selfChar live : Toward=%d LastEscape=%.2f LastFirst=%.2f LastSecond=%.2f LastScroll=%.2f LastSummon=%.2f"),
+			LiveCharacter->Toward ? 1 : 0, LiveCharacter->LastEscapeTime, LiveCharacter->LastFirstSkillTime,
+			LiveCharacter->LastSecondSkillTime, LiveCharacter->LastScrollTime, LiveCharacter->LastSummonTime));
+	};
+
+	DrawPSTable(TEXT("selfPS"), SelfPSAuthority.Get(), SelfPlayerState.Get());
+	DrawCharacterTable(SelfCharacterAuthority.Get(), SelfCharacter.Get());
+	DrawPSTable(TEXT("enemyPS"), EnemyPSAuthority.Get(), EnemyPlayerState.Get());
+}
+
 void UC_PredictionComponent::TickPredictionTimeout(float DeltaTime)
 {
+	// 调试绘制（阶段二 2.1）：本函数是每帧唯一的那次调用，绘制借它进来。
+	// Prediction.Draw 关着（默认）时 DrawPredictionDebug 第一行就返回，本函数行为不变
+	DrawPredictionDebug();
+
 	// 超时判定必须用世界时间与记录 StartTime 比较（设计 2.3.1 实现约束）：玩家被时停时
 	// （CustomTimeDilation = 0）DeltaSeconds 为 0，累加式计时会让其预测永不超时。
 	// 参数保留只是为了和 Tick 的调用形式一致（设计 3.4.5 给的签名）
@@ -1211,3 +1367,50 @@ void UC_PredictionComponent::FinishPredictionKey(uint32 KeyID, bool bConfirmed)
 		ActivePredictionKeyID = 0;
 	}
 }
+
+// ---- 调试命令（计划 2.3 的验收工具）----
+// 用途：绕过客户端的本地先行判定，直接向服务器发一次请求，用来在"不可行时机"制造请求，
+// 验证 2.3 搬进服务器的那些判据会拒绝、且不写值（此刻还没有预测键，拒绝表现为"世界状态不变"）。
+// 命令在敲它的那个实例里执行，取该实例自己的本地 PlayerController：
+// 局域网对战就在要测的那个客户端窗口的控制台里敲。2.6 的 Prediction.ForceReject / DropResolve 同放这里
+namespace
+{
+	//取本实例的本地 PlayerController：GEngine->GetFirstLocalPlayerController 走的是 GameInstance 的
+	//本地玩家（Engine.h:2828 / UnrealEngine.cpp:4122）。监听服务器上远端客户端没有本地玩家，
+	//因此选中的一定是主机自己那个；客户端上就一个 PlayerController，即自己那个
+	AC_PlayerController* GetLocalDebugPlayerController(UWorld* World)
+	{
+		if (!World || !GEngine)return nullptr;
+		return Cast<AC_PlayerController>(GEngine->GetFirstLocalPlayerController(World));
+	}
+
+	void DebugRequestSkill(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.Num() < 1)return;
+		AC_PlayerController* PC = GetLocalDebugPlayerController(World);
+		if (!PC)return;
+		const int32 Skill = FCString::Atoi(*Args[0]);
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugSkill: raw request Server_ChangeSkillState(%d)"), Skill);
+		PC->Server_ChangeSkillState(Skill);
+	}
+
+	void DebugRequestChakra(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.Num() < 1)return;
+		AC_PlayerController* PC = GetLocalDebugPlayerController(World);
+		if (!PC)return;
+		const int32 Chakra = FCString::Atoi(*Args[0]);
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugChakra: raw request Server_ChangeChakra(%d)"), Chakra);
+		PC->Server_ChangeChakra(Chakra);
+	}
+}
+
+static FAutoConsoleCommandWithWorldAndArgs GDebugRequestSkillCommand(
+	TEXT("Prediction.DebugSkill"),
+	TEXT("Raw Server_ChangeSkillState request, bypassing the local checks (plan 2.3 acceptance). Usage: Prediction.DebugSkill <1|2|4|5>"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DebugRequestSkill));
+
+static FAutoConsoleCommandWithWorldAndArgs GDebugRequestChakraCommand(
+	TEXT("Prediction.DebugChakra"),
+	TEXT("Raw Server_ChangeChakra request, bypassing the local checks (plan 2.3 acceptance). Usage: Prediction.DebugChakra <0..4>"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DebugRequestChakra));

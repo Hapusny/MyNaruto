@@ -19,6 +19,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/GameStateBase.h"
 #include "C_GrabPoinnt.h"
+#include "C_PredictionComponent.h"
+#include "C_AuthorityValueComponent.h"
 
 AC_Character::AC_Character()
 {
@@ -62,9 +64,28 @@ AC_Character::AC_Character()
 		}
 	}
 
+	//预测组件（设计 3.2：构造函数里 CreateDefaultSubobject，不手动 SetupAttachment）
+	PredictionComponent = CreateDefaultSubobject<UC_PredictionComponent>(TEXT("PredictionComponent"));
+
+	//权威值表组件（设计 2.7.5 / 计划 2.4：同上，bReplicates 由组件自己的构造函数置位）
+	AuthorityValueComponent = CreateDefaultSubobject<UC_AuthorityValueComponent>(TEXT("AuthorityValueComponent"));
+
 	//网络复制
 	bReplicates = true;
 	SetReplicateMovement(true);
+}
+
+void AC_Character::BeginPlay()
+{
+	Super::BeginPlay();
+
+	//预测系统：初始化预测上下文（设计 3.4.1 / 计划 2.1）。
+	//客户端上 PlayerState 与 Controller 都是随后同步到达的，这一次多半失败 —— 失败不是错误，
+	//由 Tick 里的重试补上。这里不判断返回值，避免"数据没到"被当成异常
+	if (PredictionComponent)
+	{
+		PredictionComponent->InitializePredictionContext();
+	}
 }
 
 void AC_Character::OnRep_PlayerState()
@@ -94,13 +115,26 @@ void AC_Character::OnTeamChanged()
 void AC_Character::MyInitialize(ETeamType team)
 {
 	//根据队伍信息设置朝向和位置标记
+	//本函数是在客户端上跑的（OnRep_PlayerState / OnTeamChanged），朝向必须走 RPC 交给服务器改、
+	//再经 Toward 复制回来：原来直调 Server_ChangeToward_Implementation 只会改本地那一份（设计 5.8）
 	if (team == ETeamType::Red) {
-		if(Toward)Server_ChangeToward_Implementation(false);
+		if(Toward)Server_ChangeToward(false);
 		PlaceMark->SetSpriteColor(FColor::Red);
 	}
 	else {
-		if(!Toward)Server_ChangeToward_Implementation(true);
+		if(!Toward)Server_ChangeToward(true);
 		PlaceMark->SetSpriteColor(FColor::Blue);
+	}
+
+	//预测系统（计划 2.4）：本函数正是"PlayerState 与 Team 都就绪"的时刻（两端各自执行 ——
+	//服务器在 SpawnPawnToPlayer 里、客户端在 OnRep_PlayerState / OnTeamChanged 里），而敌方 PS 的
+	//查找要等 Team 到齐才可能命中。Tick 里的重试门槛是 CanPredict()（只看自身三项），自身到齐后
+	//就不再重试，于是首次初始化若早于 Team，敌方那一格会一直空着（已定事项 20 允许留空，
+	//但没有任何后续时机补绑）。这里补一次初始化：重复调用安全（重绑即覆盖，已定事项 21），
+	//也不新增接口（设计 3.7 的扩展原则）
+	if (PredictionComponent)
+	{
+		PredictionComponent->InitializePredictionContext();
 	}
 }
 
@@ -155,7 +189,11 @@ void AC_Character::AddChakra()
 {
 	AC_PlayerState* PS = Cast<AC_PlayerState>(GetPlayerState());
 	if (!PS)return;
-	if (PS->Chakra < 4)Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra + 1);
+	//改为走 RPC 并判空（设计 5.8）：原来直调 Server_ChangeChakra_Implementation，
+	//客户端上那条路只会改本地那一份查克拉，服务器随后复制回来把它盖掉
+	AC_PlayerController* PC = Cast<AC_PlayerController>(Controller);
+	if (!PC)return;
+	if (PS->Chakra < 4)PC->Server_ChangeChakra(PS->Chakra + 1);
 }
 
 void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset, int32 Box)
@@ -178,13 +216,14 @@ void AC_Character::Server_SetSummonIndex_Implementation(int32 target)
 void AC_Character::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(AC_Character, Toward);
-	DOREPLIFETIME(AC_Character, LastEscapeTime);
+	//预测系统（设计 5.2b / 计划 2.4）：Toward 与 LastEscapeTime 两条 DOREPLIFETIME 已删除，
+	//改由 AuthorityValueComponent.AuthorityValueTable 下发。本函数保留（将来若有新的复制属性仍在此登记）
 }
 
 void AC_Character::ChangeAttack(int32 attack)
 {
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
 	if (attack == 0) {
 		PS->Attack = 0;
 		PS->MySkill = 0;
@@ -196,8 +235,9 @@ void AC_Character::ChangeAttack(int32 attack)
 		return;
 	}
 	if (bPreInputLock) {
-		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
-		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
+		//转向走 RPC（设计 5.8）：原来直调 Server_ChangeToward_Implementation
+		if (TryTargetToward.X > 0)Server_ChangeToward(true);
+		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		PS->Attack = attack;
 		MyAttack = attack;
 	}
@@ -206,11 +246,22 @@ void AC_Character::ChangeAttack(int32 attack)
 
 void AC_Character::ChangeState(ECharacterStateType target)
 {
-	GetPlayerState<AC_PlayerState>()->CharacterState = target;
+	//权限语义（设计 5.8）：CharacterState 是服务器的量，本函数只由服务器路径调用
+	//（BP_Character 的 I_ChangeState 权威分支 / AN_ChangeState）。
+	//客户端那一半在 2.7 接上，届时走预测接口本地先行（设计 5.9a / 已定事项 22），
+	//不从这个入口进来 —— 本地值只留一个写者
+	if (!HasAuthority())return;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
+	PS->CharacterState = target;
 }
 
 void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
 {
+	//权限语义（设计 5.8 / 2.9）：两端各自执行。AddActorLocalOffset 没有权威检查
+	//（引擎的 MoveComponentImpl 只做移动、不报错），服务器这一半是权威位移；
+	//客户端那一半在 2.7 / 3.4 接上（动画通知内先行 + RecordMoveBaseline），本函数不做端别判定
+
 	//根据意图改变方向
 	FVector MyOffset = Offset;
 	if (TargetToward.Y == 0.f)MyOffset.Y = 0;
@@ -225,6 +276,19 @@ void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
 	if (MyLocation.Y + MyOffset.Y < MinLocation.Y)MyOffset.Y = MinLocation.Y - MyLocation.Y;
 
 	AddActorLocalOffset(MyOffset);
+}
+
+void AC_Character::StartPreInput()
+{
+	//打开预输入窗口（AN_PreInput，计划 2.2 / 已定事项 24）。
+	//置假之后，窗口内的一次普攻输入会由 Server_Attack_Implementation 把它置回真，
+	//推进点的 AN_ChangeAttack -> ChangeAttack 消费它决定是否连段变换
+	bPreInputLock = false;
+
+	//同时清掉残留的移动意图：TryTargetToward 只由 Server_SetTryTargetToward 刷新，
+	//玩家松开方向键后客户端不再发新值，服务器上会留着上一次的方向，
+	//而 ChangeAttack / Server_Attack 的转向判定会读它
+	TryTargetToward = FVector2D(0.f, 0.f);
 }
 
 void AC_Character::Server_SetTryTargetToward_Implementation(FVector2D TargetToward)
@@ -329,8 +393,10 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
+		//顺序（计划 2.3）：技能请求排在查克拉清零之前。服务器的判据是"满查克拉才接受奥义"，
+		//清零先到的话服务器看到的就是 0 了 —— 两条请求在同一 Actor 上，同通道、按序到达
 		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
 		BP_FinalSkillEffect();
 	}
 }
@@ -413,8 +479,10 @@ void AC_Character::Server_Attack_Implementation()
 {
 	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	//判空（设计 5.8）：下一行就要读 PS->CharacterState，原来没有任何判空
+	if (!PS)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	if (PS && bAttackInputLock == false) {
+	if (bAttackInputLock == false) {
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
 		bAttackInputLock = true;
@@ -457,6 +525,22 @@ void AC_Character::Tick(float DeltaTime)
 	if (!PS)return;
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!GameState)return;
+
+	//预测系统：上下文重试 + 超时兜底（设计 5.7 / 3.4.5）。
+	//位置必须在这里 —— 上一行是 PS / GameState 的空指针早退，早退期间进不到这里，
+	//否则角色数据未就绪的那段时间超时检查会静默停摆（设计 5.7）
+	if (PredictionComponent)
+	{
+		//PlayerState / Controller 在客户端是逐帧到达的：上下文还无效时每帧重试一次初始化。
+		//就绪后 CanPredict() 为真即不再重试（重绑即覆盖，重复调用本就安全，设计 3.4.1）
+		if (!PredictionComponent->CanPredict())
+		{
+			PredictionComponent->InitializePredictionContext();
+		}
+
+		//超时兜底（阶段二还没有键，这里是空转；Prediction.Draw 的绘制也挂在这次调用的开头）
+		PredictionComponent->TickPredictionTimeout(DeltaTime);
+	}
 
 	//根据角色高度同步动画高度
 	if (GetActorLocation().Z > 0) {
@@ -506,8 +590,12 @@ void AC_Character::Tick(float DeltaTime)
 			}
 		}
 		if (PS->CharacterState == ECharacterStateType::Grabbed) {
+			//触发条件与频率（设计 5.8）：被抓期间每帧比对"自己"与"被抓点"的位置，不一致就发一次多播，
+			//两端一起挪过去 —— 这是连续跟随（抓取点会随抓取者的动画移动），不是"状态变化时调一次"；
+			//抓取点静止且自己已在位时不发。多播本身是 Reliable 的，发送频率由"抓取点是否移动"决定
 			if (BeGrabbedPoint && BeGrabbedPoint->bIsUsing) {
-				if(GetActorLocation() != BeGrabbedPoint->GetActorLocation())Mult_ChangeGrabLocation(BeGrabbedPoint->GetActorLocation());
+				const FVector GrabLocation = BeGrabbedPoint->GetActorLocation();
+				if(GetActorLocation() != GrabLocation)Mult_ChangeGrabLocation(GrabLocation);
 			}
 			else {
 				Mult_ChangeGravity(true);

@@ -8,6 +8,9 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTeamChanged);
 
+//预测系统：权威值表组件（设计 2.7.5 / 计划 2.4，只在构造函数里创建，定义见 C_AuthorityValueComponent.h）
+class UC_AuthorityValueComponent;
+
 //队伍
 UENUM(BlueprintType)
 enum class ETeamType : uint8
@@ -53,6 +56,12 @@ public:
 
     AC_PlayerState();
 
+    //权威值表组件（设计 2.7.5 / 计划 2.4）：承载本 PS 上被预测属性（HealthValue / Chakra / Attack /
+    //MySkill / CharacterState）的权威值。服务器在 PreReplication 里从真实属性刷新，客户端收到表后
+    //按采用规则写回 —— 这五个属性已从逐属性复制中摘除（设计 5.2b），只走这条通道
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+    TObjectPtr<UC_AuthorityValueComponent> AuthorityValueComponent;
+
 
     //队伍相关
     FOnTeamChanged OnTeamChanged;
@@ -68,21 +77,24 @@ public:
 
 
     //角色数值
-    UPROPERTY(Replicated, BlueprintReadWrite)
+    //预测系统（设计 5.2b / 计划 2.4）：以下五个属性不再走逐属性复制（DOREPLIFETIME 已删），
+    //改由本 PS 上的 AuthorityValueComponent.AuthorityValueTable 下发。UPROPERTY 保留，本地读写照旧；
+    //也不要给它们补 ReplicatedUsing 或写 OnRep —— 采用与否由表到达时按采用规则统一决定（设计 5.2c）
+    UPROPERTY(BlueprintReadWrite)
     float HealthValue = 300.f;
 
-    UPROPERTY(Replicated, BlueprintReadWrite)
+    UPROPERTY(BlueprintReadWrite)
     int32 Chakra = 2;
 
 
     //角色状态
-    UPROPERTY(Replicated, BlueprintReadWrite)
+    UPROPERTY(BlueprintReadWrite)
     int Attack = 0;
 
-    UPROPERTY(Replicated, BlueprintReadWrite)
+    UPROPERTY(BlueprintReadWrite)
     int MySkill = 0;
 
-    UPROPERTY(Replicated,BlueprintReadWrite)
+    UPROPERTY(BlueprintReadWrite)
     ECharacterStateType CharacterState = ECharacterStateType::Normal;
 
 

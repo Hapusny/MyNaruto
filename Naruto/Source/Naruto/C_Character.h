@@ -14,6 +14,8 @@ class UPaperSpriteComponent;
 class AC_PlayerState;
 class UBoxComponent;
 class AC_GrabPoinnt;
+class UC_PredictionComponent;
+class UC_AuthorityValueComponent;
 enum class ETeamType : uint8;
 struct FInputActionValue;
 enum class ECharacterStateType : uint8;
@@ -37,12 +39,21 @@ class NARUTO_API AC_Character : public ACharacter
 	friend class UC_PredictionComponent;
 	friend class UC_AuthorityValueComponent;
 
+	//服务器校验（计划 2.3 / 设计 5.1）：技能请求被服务器接受时，由 PlayerController 写下权威 CD 时间戳。
+	//四个时间戳仍留在本类（设计 5.3：不加 UPROPERTY、不加 Replicated），服务器只写自己那一份，
+	//2.4 起由权威值表下发给客户端 —— 服务器不写的话，服务器自己的 CD 判据永远是"没在冷却"
+	friend class AC_PlayerController;
+
 public:
 
 	AC_Character();
 
 	//等待PS网络同步后初始化
 	virtual void OnRep_PlayerState() override;
+
+	//预测系统：初始化预测上下文（设计 3.4.1 / 计划 2.1）。
+	//客户端上 PlayerState / Controller 都在 BeginPlay 之后才到达，首次调用多半失败，由 Tick 重试
+	virtual void BeginPlay() override;
 
 	UFUNCTION()
 	void OnTeamChanged();
@@ -68,6 +79,17 @@ public:
 	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
 
+	//预测组件（设计 3.2 / 3.1：挂在角色上，服务器与客户端各挂一个，随角色生成销毁）。
+	//预测逻辑只在客户端生效，服务器上它只用于读回执带回来的预测键
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	TObjectPtr<UC_PredictionComponent> PredictionComponent;
+
+	//权威值表组件（设计 2.7.5 / 计划 2.4）：承载 Character 段的被预测属性（Toward / LastEscapeTime /
+	//四个 CD 时间戳）。服务器在 PreReplication 里从本类成员刷新，客户端收到表后按采用规则写回。
+	//构造函数里创建（C_Character.cpp），随角色一起复制
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	TObjectPtr<UC_AuthorityValueComponent> AuthorityValueComponent;
+
 
 	//角色受到伤害
 	UFUNCTION(BlueprintCallable)
@@ -91,7 +113,9 @@ protected:
 
 public:
 	//角色朝向
-	UPROPERTY(Replicated,BlueprintReadWrite)
+	//预测系统（设计 5.2b / 计划 2.4）：不再走逐属性复制（DOREPLIFETIME 已删），改由
+	//AuthorityValueComponent.AuthorityValueTable 下发；UPROPERTY 与蓝图读写照旧
+	UPROPERTY(BlueprintReadWrite)
 	bool Toward = true;
 
 	//角色查克拉增加
@@ -166,6 +190,14 @@ public:
 	//角色位移
 	UFUNCTION(BlueprintCallable)
 	void MakeMove(FVector Offset,FVector2D TargetToward);
+
+	//打开预输入窗口（AN_PreInput，计划 2.2 / 已定事项 24）
+	//置假之后，窗口内的一次普攻输入由 Server_Attack_Implementation 置回真，
+	//推进点的 AN_ChangeAttack -> ChangeAttack 消费它决定是否连段变换；同时清掉残留的移动意图。
+	//本函数不做权限判定：门由调用方把（BP_Character 的 I_StartPreInput 权威分支），
+	//TryTargetToward 那一半不能落到客户端上（客户端那份是本地输入意图，见 Move()）
+	UFUNCTION(BlueprintCallable)
+	void StartPreInput();
 
 	//输入控制变量
 	UPROPERTY(BlueprintReadWrite)
@@ -341,7 +373,10 @@ public:
 private:
 
 	//时间戳
-	UPROPERTY(Replicated)
+	//预测系统（设计 5.2b / 5.3 / 计划 2.4）：LastEscapeTime 不再走逐属性复制，改由
+	//AuthorityValueTable 下发；下面四个时间戳本来就是普通成员（连 UPROPERTY 都没有），
+	//现在进表后也保持原样 —— 这正是权威值表相对逐属性复制省事的地方（设计 5.3）
+	UPROPERTY()
 	float LastEscapeTime = 0.f;//替身
 
 	float LastFirstSkillTime = 0.f;//一技能
