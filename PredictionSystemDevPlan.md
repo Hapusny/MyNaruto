@@ -57,6 +57,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - 开关用 cvar 而非组件配置属性：不改动设计 3.7 冻结表里的任何签名，且能在 console 里逐片排查。
 - 这些 cvar **长期保留**，它们是以后线上排障的唯一手段。
 - **2.1 已落地**：三个开关都是文件级 cvar，`extern` 声明在 `C_PredictionComponent.h`（不新增类接口，设计 3.7 不动）。`Prediction.Log 1` 把 `LogPrediction` 抬到 Verbose；`Prediction.Draw` 只画**本地控制**的那个角色，绘制借 `TickPredictionTimeout` 的开头进来（组件自己不 Tick，见设计 3.2），默认关；`Prediction.Enabled` 默认开，**只被接入点读取，不进 `CanPredict()`**——那条判据问的是"上下文是否有效"（已定事项 19），与"这次要不要预测"是两件事。
+- **2.6 已落地**：`Prediction.ForceReject` / `Prediction.DropResolve` 是**服务器侧**开关，定义与声明整段包在 `#if !UE_BUILD_SHIPPING` 里（本表的约定），读取走两个恒定义的查询函数（Shipping 里恒 false，见已定事项 39）；`ForceReject` 只作用于带键请求。配套验收命令 `Prediction.DebugKeyedSkill <1|2|4|5>`（本地临时构造键、故意不进键表）。
 
 ---
 
@@ -231,6 +232,10 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 **动作**：2.7 开工第一步在编辑器里打开 `BP_Character` 的这三个接口函数确认一次（其余 16 个不受影响）。这是 2.0 留下的唯一未闭环项。
 
+**闭环（2026-10-10，开发者口径）**：蓝图侧以 `BlueprintSideCallSiteInventory.md` 的说明为准、且**逐字成立**——写了"权威"就只有权威分支、写了"本地控制"就只有本地控制分支、什么都没写就是没有判定，描述的调用过程就是实际调用过程。→ 本项以**调查报告为准**：这三条今天**客户端都不执行**。推论（同样适用于其余标"权威"的时机类）——`I_StartPreInput` / `I_LockTargetToward` / `I_ChangeDamageValue` / `I_StartHitCheck` / `I_SetGrab` / `I_StopGrab` 的客户端那一半**同样不是从现有实现里"拆"出来的，而是一律随预测接入新加**，各自的落点见 2.7 的判定表。
+
+设计 2.4.4 / 5.9a 与协同笔记里"两端各自执行"的措辞按此**更正**——更正的是**现状描述**，不是目标：时机类的目标仍是"两端都执行"，只是客户端那一半按本节的分期随切片到达。3.3 的"删掉蓝图里现有的段号写入"据此改写为"蓝图里本来就没有客户端那一半的段号写入，客户端那一半是新加的"（见 2.7 变更表）。
+
 ② **`PS.CharacterState` 整条按属性预测接入**（裁决，见"已定事项"22）：它的取值里有四个是状态机的状态（`Staggered` / `Launched` / `Grabbed` / `Protected`，GDD 4.6.2），但**没有一个是客户端输入触发的**——霸体族来自 `AN_ChangeState`、受击 / 保护族来自服务器、`Normal` 来自收招。所以它不建键、不绑生命周期，一律"写标记 + 随权威值表采用 / 回滚"。**对 2.7 的直接含义**：`AN_ChangeState` 这一路在客户端接上时只写标记（时机类的通用做法），不要为它建键；本次盘点涉及的正是它写的那一族（霸体）。
 
 ③ **`Adamantine` 无写入路径**，见 2.0.3 末段——3.1 的霸体验收范围据此收窄。
@@ -378,17 +383,119 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 **一处语义说明**：摘除之后，这批属性在客户端上的权威写者只剩表的采用规则；但客户端代码今天仍会在本地写其中几个（`ChangeAttack` 写 `PS->Attack` / `PS->MySkill`、`AC_PlayerController::PlayerGetDamage` 写 `CharacterState` 等，两端各自执行）。阶段二没有预测键，采用规则恒走第二行：这些本地写会在下一次表到达时被服务器的值覆盖——与摘除前的逐属性复制同一条件（引擎只在值变化时下发）。到阶段三给它们加上预测标记后，采用规则的第一行 / 第三行才开始起作用（设计 2.7.2）。
 
+**缺陷与修复（2026-10-10，2.8 验收期间由开发者实机发现）——红方客户端不能转向**：
+
+- **症状**：客户端为红方时角色不能转向（按反方向不发转向请求）；客户端为蓝方正常，服务器两侧都正常。
+- **根因是两件事叠在一起，顺序由引擎定死**：
+  1. 引擎对新复制过来的 Actor 的顺序是**先应用初始复制、再调 `OnRep`、最后才 `BeginPlay`**（`DataChannel.cpp:3223` `PostReceivedBunch` → `:3237` `PostNetInit`；`Actor.cpp:4124` 在 `PostNetInit` 里才 `DispatchBeginPlay`，该处注释原文是 "After all properties have been initialized, call PostNetInit"）。**设计 2.7.5 的假设反了**——它写"若服务器改过值……`OnRep` 会照常触发并覆盖这次初始化"，实际是那次"初始化"跑在覆盖之**后**。
+  2. 于是客户端 `UC_AuthorityValueComponent::BeginPlay` 里"按宿主当前值填一遍"把**刚收到的服务器值覆盖成本地默认值**；而 `OnRep` 只在【变化】时来，那份权威值再也回不来。
+  3. **为什么只有红方**：红方服务器侧 `Toward = false`，与类默认 `true` 不同（蓝方恰好等于默认，覆盖了也看不出来）。客户端 `Toward` 卡在 `true` 之后，`Move()`（`C_Character.cpp:334-335`）读本地 `Toward` 判"要不要发转向请求"，条件再也不成立——请求永远发不出去。
+- **修法**（两处，都在阶段一 / 二新建的文件里；**不动原项目**）：客户端不写表 + 绑定即同步一次。
+
+| 文件 | 改动 |
+| --- | --- |
+| `C_AuthorityValueComponent.cpp` | `RefreshTableFromHost` 开头加 `NM_Client` 早退。**"客户端从不写表"本来就是本组件的契约**（头文件原话），实现里只有 `BeginPlay` 这一处绕开了它；`BeginPlay` 的调用保留（服务器侧仍要——单独跑时没有 `PreReplication`，那一次就是表的初值） |
+| `C_AuthorityValueComponent.h` | `RefreshTableFromHost` 的注释按上面改写（原注释把"客户端在 `BeginPlay` 里调用一次"当作设计的一部分） |
+| `C_PredictionComponent.cpp` | `BindAuthorityValueHost` 绑完委托后补一次采用（仅 `NM_Client` 宿主）：表是 `ReplicatedUsing`、`OnRep` 只在变化时来，而客户端"首次到达"落在**委托还没绑**的空窗里（绑定在 `BeginPlay` 或其后每帧的重试里做）——值已在表里，只是没人把它写回本地属性。等价于把"订阅"补成"订阅 + 立即同步"。**服务器侧不做**：那里的表是从宿主刷出来的副本，反过来写会把宿主刚改过、还没刷进表的值滚回去（`MyInitialize` 紧接着调 `InitializePredictionContext` 就是这种时刻） |
+
+- **不是"客户端也不该读表派生值"**：客户端读表派生值做判定是本设计的既有模式（`Move()` 读的 `PS->Attack` / `CharacterState` 同样是表派生值），通道修好、它们一起恢复；本次只修通道。
+- **同一处影响的其余字段**：与 `Toward` 同表下发的一切在客户端上都受这一处影响（`LastEscapeTime`、四个 CD 时间戳、PS 段五个字段的**初值**）。平时看不出来，是因为要么等于类默认值、要么随后被"变化触发的 `OnRep`"纠正；`Toward` 是唯一"与默认值不同、之后又长期不变"的一格。
+- **验收**：2.8 收口清单 A1（两端 `live` 行逐字段对齐，含 `enemyPS` 那张表）就是抓这一处的——**2.4 的验收 1 此前没有正式跑过**，这是它的第一次真正暴露。
+
 ### 2.5 锁更正通道（设计 5.5 / 5.6）
 
 - 内容：`AC_Character::Client_CorrectLocks(Mask, Values)`；在服务器**每一处写锁的位置**下发（`Server_Attack` 接受时、`ChangeAttack` 连段结束、`PlayerStateReset`、`OnAttackBoxOverlap`）；**`Server_Attack_Implementation` 末尾（含拒绝路径）补发一次**；`bSuccessHit` 的复位点按设计 5.6 定案（复位点与读取点同处）。
 - 落点：`C_Character.cpp:412-424`、`:185-205`、`:433-446`；`C_PlayerController.cpp:123-131`。
 - 验收：客户端打印三个锁，在服务器写锁的每个场景（普攻被接受 / 被拒绝 / 连段结束 / 受击打断 / 命中）与服务器一致；**拒绝场景**（此时服务器没写锁）验证补发那一次确实让客户端锁复位——这是 2.6.1 的核心验收点，切片 3.3（普攻段）的闸门 1 直接依赖它。
 
+**已落地（2026-10-10）**，编译通过（`NarutoEditor Win64 Development`，0 警告）。落点里写的 `:412-424` / `:185-205` / `:433-446` / `C_PlayerController.cpp:123-131` 是动手前的位置，改动后见下表。
+
+对原项目的修改——三个现有文件，本包增量共 +100 行 / −4 行（`C_Character.h` / `C_Character.cpp` 里的其余行属 2.1–2.4）。无删除函数、无签名改动；四个删除行分别是 `ChangeAttack` 的提前 `return` 与 `Server_Attack_Implementation` 的两条早退，都改成了带补发/收口的写法：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_Character.h` | `:42-47` | 友元注释补一句：`PlayerStateReset` 写完锁之后也要走 `SendLockCorrection`（private） |
+| | `:204-210` | 新增 `UFUNCTION(BlueprintCallable) ResetSuccessHit()`——设计 5.6 定案的复位点（已定事项 34） |
+| | `:227-237` | 新增 `UFUNCTION(Client, Reliable) Client_CorrectLocks(uint8 LockMask, uint8 LockValues)`，位域按设计 2.8 |
+| | `:415-432` | 私有：三个锁位常量（bit0 / bit1 / bit2）+ `LockBitsAttackRequest`（`Server_Attack` 三个出口统一发的两位，已定事项 33）+ `SendLockCorrection(uint8 LockMask)` |
+| `C_Character.cpp` | `:223-249` | `ChangeAttack`：`attack == 0` 的提前 `return` 收口到函数末尾（语义不变），三个分支共用末尾那一次 `SendLockCorrection(LockBitAttackInputLock)`——与设计 2.8 调用点表的"连段结束 / 预输入被消费"两行对应 |
+| | `:482-507` | `Server_Attack_Implementation`：两条早退改成"先补发再返回"的分支，函数末尾再加一次；三个出口统一发 `LockBitsAttackRequest`（已定事项 33） |
+| | `:516-555` | 新增三函数：`SendLockCorrection`（按掩码读当前值打包下发，Verbose 日志带角色名）、`Client_CorrectLocks_Implementation`（只覆盖掩码覆盖的锁 + Verbose 日志带角色名）、`ResetSuccessHit`（`HasAuthority()` 守卫 → 置假 → 下发 bit2） |
+| | `:556-569` | `OnAttackBoxOverlap`：`bSuccessHit = true` 之后下发 bit2（设计 2.8 的命中行） |
+| `C_PlayerController.cpp` | `:142-146` | `PlayerStateReset`：`bAttackInputLock = false` 之后 `SendLockCorrection(LockBitAttackInputLock)`（设计 2.8 的受击打断行） |
+
+阶段一新建文件上的扩展：`C_PredictionComponent.cpp:1412-1443` 新增验收工具 `Prediction.DebugLock [<AttackInputLock>] [<PreInputLock>] [<SuccessHit>]`（本地直接写锁、不发服务器，缺席的参数保持原值）。**为什么必须有它**：下面的验收 6 要求"拒绝场景验证补发那一次确实让客户端锁复位"，而客户端要到切片 3.3 才在输入瞬间本地置位（设计 2.6.1）——在那之前两端的锁恒等，补发的值恒等于客户端已有的值，无从观察。这条命令制造"客户端本地值 ≠ 服务器值"，是 2.5 验收的前提，3.3 之前也是唯一的办法（已定事项 35）。没有新增公开接口（设计 3.7 冻结的接口表不受影响）。
+
+**验收期间发现并顺手修掉的一处日志噪声**（已定事项 36）：`Prediction.Log 1` 之下，`InitializePredictionContext: PlayerState or PlayerController is not available yet; call again once it arrives` 每秒刷满屏。机制本身是设计内的——客户端上 PlayerState / Controller 逐帧到达，`AC_Character::Tick` 在 `CanPredict()` 为假时每帧重试一次初始化（2.1 落地；这条日志是 Verbose，只有开了 `Prediction.Log 1` 才可见），**但有一个组件永远就绪不了**：客户端上的敌方角色是模拟代理，引擎不复制 `Controller`（远端 `PlayerController` 只发往拥有者连接），它的 `CanPredict()` 恒为假。重试无害（`InitializePredictionContext` 在绑定前就返回）且是设计 3.4.1 的形状，照旧保留；改的是日志——`C_PredictionComponent.cpp` 两处"还没就绪"改成**每个组件只记第一次**（新增成员 `bContextPendingLogged`，成功那一次重新武装），并带上角色名，下一次真出问题时一行就能定位是谁。**纯日志改动，重试行为与组件状态一字未动**。
+
+**蓝图侧：本包需要一处蓝图改动**（设计 5.6 的定案）：`bSuccessHit` 的**写入者全工程只有两处**——`C_Character::OnAttackBoxOverlap`（服务器置真，本包已加下发）与蓝图 `BP_Character` 的 `I_StartHitCheck`（权威分支置假）。两处都得走更正通道，客户端那一份才不会漂：
+
+| 蓝图 | 位置 | 改动 |
+| --- | --- | --- |
+| `BP_Character` | `I_StartHitCheck`：权威分支里那条 `Set SuccsessHit = false`（盘点 `BlueprintSideCallSiteInventory.md:31`，语义是"下一次攻击的命中检测开始时清掉上一次的命中"） | 换成调用 `ResetSuccessHit`（本包新增的 `BlueprintCallable`）；分支结构不动 |
+
+`BP_Menma` 的 `I_HitJump`（盘点 `:54`：权威且 `successHit` 为真时把 `MySkill` 置 3、并调 `I_GiveChakra`）**只读不写**，本包不动它。
+
+**设计 5.6 的一处前提需要更正**（已定事项 34）：5.6 写"复位点与读取点同处……那门技能的服务器判定逻辑消费掉它之后随即复位"，这句话的前提是"读取点会把它消费掉"，而开发者核对蓝图后的结论是读取点（`I_HitJump`）只判断、不写入。本包按 5.6 同一节里"**不引入新的复位时机**"这一条执行：保留工程既有的那个复位点（`I_StartHitCheck`），只把它接进更正通道——既不新增复位时机，也不让任何一个写者绕开通道。
+
+**验收步骤**（局域网两窗口，其中一个为主机；下面对照的是"客户端窗口 `Prediction.Draw` 的 `locks:` 行 ←→ 服务器窗口日志里的 `SendLockCorrection: <角色名> mask ... values ...`"，日志带角色名，两个角色不会混）：
+
+1. 两端都开 `Prediction.Log 1`（`LogPrediction` 抬到 Verbose）与 `Prediction.Draw 1`。
+2. **普攻被接受**：客户端按一次普攻 → 服务器日志 `mask 3 values 3`（bit0 + bit1 都置真）→ 客户端 `locks:` 行 `bPreInputLock=1 bAttackInputLock=1`。
+3. **连段结束**：让一段普攻走完（`AN_ChangeAttack` → `ChangeAttack(0)`）→ 服务器 `mask 1 values 0` → 客户端 `bAttackInputLock=0`。
+4. **受击打断**：被对方打中（平推 / 击飞 / 抓取任一）→ `PlayerStateReset` 的 `mask 1 values 0` → 客户端 `bAttackInputLock=0`。
+5. **命中**：己方攻击框碰到对方 → `OnAttackBoxOverlap` 的 `mask 4 values 4` → 客户端 `bSuccessHit=1`；蓝图那处改完之后，**下一次攻击开始**（`I_StartHitCheck` 的命中检测开始）→ `mask 4 values 0` → 客户端 `bSuccessHit=0`。这一段里 `BP_Menma` 的 `I_HitJump` 只读该标志、不写也不下发，别把它当成复位点。
+6. **拒绝场景（2.6.1 的核心验收）**：
+   1. 客户端敲 `Prediction.DebugLock 1`——只写本地：客户端 `bAttackInputLock=1`，服务器那一份还是假；
+   2. 在服务器会拒绝的时机按普攻：最省事的办法是让对方把自己打成僵直 / 击飞（状态不是 `Normal` / `Protected`）再按普攻；
+   3. 服务器日志出现 `mask 1 values 0`（拒绝路径的补发，客户端本地那一次置位被解除）→ 客户端 `locks:` 行 `bAttackInputLock` 回到 0；
+   4. 随后立刻再按一次普攻：能正常出手（本地闸门 1 没有自锁）——这正是 3.3 依赖的那条性质。
+
+**一处按设计保留的缺口**：`StartPreInput()`（`AN_PreInput` → `C_Character`，2.2 落地）也写 `bPreInputLock`（置假），而设计 2.8 的服务器调用点表里**没有它**。因此"打开预输入窗口"之后到下一次 `Server_Attack` 之间，客户端的 `bPreInputLock` 与服务器不一致（客户端停在真）。阶段二无影响：客户端在 2.7 之前不读这个锁（`ChangeAttack` 与两道闸门都在服务器侧跑）。2.7 里 `AN_PreInput` 两端执行、客户端自己把它置假，缺口自然消失。**按冻结的设计保持原样，不加下发点**——设计 2.8 的表是穷举，多一处就得多一条已定事项；留给 2.7 复核。
+
 ### 2.6 回执通道与调试工具（设计 2.11.1）
 
 - 内容：`AC_PlayerController::Client_ResolvePrediction(uint32 KeyID, uint8 Result, uint8 ConfirmedStatePacked)`（此刻暂无调用点）；`Prediction.ForceReject` / `Prediction.DropResolve`。
 - 落点：`C_PlayerController.h / .cpp`，服务器侧拒绝开关放在 2.3 建好的校验分支上。
 - 验收：用一条调试命令发送带键请求（键由本地临时构造），观察回执到达与 `ResolvePrediction` 的日志（此时键表为空，应走"静默返回"路径——顺带验证设计 3.4.5 的竞态约定）。
+
+**已落地（2026-10-10）**，编译通过（`NarutoEditor Win64 Development`，0 警告）。UHT 接受了 `FPredictionKey` 作为 RPC 参数（重新生成了 4 个 `.gen.cpp`，其中含 `C_PlayerController.gen.cpp`）——这是本包动手前唯一的技术风险，已关闭。
+
+对原项目的修改——三个现有文件，本包增量共 +98 行 / −14 行（这三个文件里其余行属 2.1–2.5）：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `C_PlayerController.h` | `:9` | 新增 `#include "C_PredictionComponent.h"`——`FPredictionKey` 按值传，UHT 生成的代码需要完整类型（该头只前向声明本类，不成环） |
+| | `:60-67` | `Server_ChangeSkillState` 加键参数 `FPredictionKey PredictionKey`（设计 3.4.2 的挂载约束：全工程只有三个 RPC 可带键，这是其中之一） |
+| | `:70-76` | 新增 `UFUNCTION(Client, Reliable) Client_ResolvePrediction(uint32 KeyID, uint8 Result, uint8 ConfirmedStatePacked)`（设计 2.11.1，宿主是 PlayerController） |
+| | `:78-81` | 新增 `SendPredictionResolve(const FPredictionKey& Key, uint8 Result)`——服务器侧唯一的回执出口（设计 2.11.4） |
+| `C_PlayerController.cpp` | `:174-248` | `Server_ChangeSkillState_Implementation`：七条拒绝出口改成"先回执再返回"、接受出口在写完权威值之后回执；`Prediction.ForceReject` 落在校验分支上（带键且开关打开 → 记日志 + 回执 Rejected + 不写任何权威值） |
+| | `:250-292` | 新增 `SendPredictionResolve`（两道闸门：`KeyID == 0` 与 `DropResolve`；打包 `(CharacterState << 4) \| (MySkill & 0x0F)`）与 `Client_ResolvePrediction_Implementation`（Verbose 日志带角色名 + 转交组件的 `ResolvePrediction`） |
+| `C_Character.cpp` | `:368` / `:386` / `:404` / `:423` / `:441` | 五个技能输入函数的请求改为传空键 `FPredictionKey()`（每个调用点原一行被替换） |
+
+阶段一新建文件上的扩展（三块，共 +81 行 / −2 行）：
+
+- `C_PredictionComponent.h:27-35` + `C_PredictionComponent.cpp:50-86`：两条服务器侧开关 `Prediction.ForceReject` / `Prediction.DropResolve`，定义与声明整段包在 `#if !UE_BUILD_SHIPPING` 里（工具表的约定：这两个只在非 Shipping 构建里编译）；读取走两个**恒定义**的查询函数 `IsPredictionForceRejectEnabled` / `IsPredictionDropResolveEnabled`（Shipping 里恒 false），所以各调用点不必自己写条件编译。
+- `C_PredictionComponent.cpp:1465-1489`（`DebugRequestKeyedSkill`）：新增调试命令 `Prediction.DebugKeyedSkill <1|2|4|5>`——本地临时构造一个键（ID 从 900001 起数，与 `CreatePredictionKey` 的计数器互不干扰），**故意不建在键表里**，随 `Server_ChangeSkillState` 发出去。
+- `C_PredictionComponent.cpp:1517-1521`：上面那条命令的注册；调试命令区的头注释同步改写。
+
+**三处需要记下来的判断**（已定事项 37–39）：
+
+1. **带键请求的调试路径复用 `Server_ChangeSkillState`，不新增调试专用 RPC**（已定事项 37）。设计 3.4.2 的挂载约束写着"只有三个 RPC 可以带键……**不为任何其他 RPC 新增预测键参数**"——为验收造一条调试 RPC 会同时违反这一条与设计 2.11.1 的接口面。于是把设计 3.4.2 指定的键参数**提前**落到这条 RPC 上（切片 3.1 本来就要做这一步），五个生产调用点一律传空键：服务器按设计 3.4.2 末行"`KeyID == 0` 按非预测请求处理"照常校验执行、不回执，行为与改造前逐位一致。原计划里"（此刻暂无调用点）"一句据此修正为"暂无**带键的**调用点"——回执接线的第一条真实路径就是这条技能分支；切片 3.1 只需把输入点的实参从空键换成 `GetActivePredictionKey()`。
+2. **回执打包收在 `SendPredictionResolve` 内部**（已定事项 38）。设计 2.11.1 把打包方式写死了（高 4 位 `CharacterState`、低 4 位 `MySkill`），切片 3.1 / 3.2 / 3.3 三个调用点若各写一遍就是三处重复；收在一处后，调用点只剩"拒绝 / 确认"两态。函数契约写在头文件：必须在**写权威值之后**调用（确认时打包的就是被接受的那个状态）。
+3. **两个开关只在非 Shipping 里编译，且 `ForceReject` 只作用于带键请求**（已定事项 39）。不带键的请求没有本地预测可回滚，拒掉它只会让开关打开时玩不了（工具表的原文就是"对**带键**请求一律回 `Rejected`"）；`DropResolve` 只挡回执，不挡任何写入。
+
+**蓝图侧：本包不需要改蓝图。** `Server_ChangeSkillState` 不是 `BlueprintCallable`，盘点文档里没有任何蓝图调用它；改的是 C++ 签名，蓝图侧看不见。
+
+**验收步骤**（客户端窗口 + 主机窗口，两端都 `Prediction.Log 1`）：
+
+1. **通道通着**：客户端在 CD 已好、状态常态时敲 `Prediction.DebugKeyedSkill 1` → 客户端 `Prediction.DebugKeyedSkill: locally built key 900001 ...`；服务器 `SendPredictionResolve: ... key 900001 result 0 packed ...`；客户端 `Client_ResolvePrediction: ... key 900001 result 0 packed ...`，**之后没有任何结算 / 回滚日志**——键表为空，走的就是设计 3.4.5 的静默返回。`packed` 高 4 位应等于服务器的 `CharacterState`、低 4 位等于 `MySkill`（技能 1 被接受后 `MySkill = 1`）。
+2. **拒绝也回执**：让一技能处于 CD 中再敲一次 → `result 1`，客户端同样收到、同样静默返回。
+3. **`Prediction.ForceReject 1`**（在**服务器**窗口敲）→ 再敲 `Prediction.DebugKeyedSkill 1`（CD 已好也一样）→ 服务器日志 `Prediction.ForceReject: ... rejects the keyed request (skill 1) without writing anything`，`MySkill` 不变、世界状态不变，客户端仍收到 `result 1`。验证完 `Prediction.ForceReject 0`。
+4. **`Prediction.DropResolve 1`**（服务器窗口）→ 敲一次 → 服务器 `Prediction.DropResolve: ... drops the resolve for key ...`，客户端**没有** `Client_ResolvePrediction`。验证完 `Prediction.DropResolve 0`。（超时兜底本身在切片 3.x 才有可观察对象：此刻没有键在键表里，`TickPredictionTimeout` 无事可做。）
+5. **不带键的请求不受影响**：敲 `Prediction.DebugSkill 1` 或正常按键 → 服务器没有任何 `SendPredictionResolve` 日志（设计 2.11.4 第 2 行）。
+
+**验收通过（2026-10-10，开发者实机）**。补一条操作提醒（不改代码）：`Prediction.DebugKeyedSkill` 那一行是命令自己打的 **Log 级**（默认可见），而 `SendPredictionResolve` 与 `Client_ResolvePrediction` 两条都是 **Verbose**——与 2.5 的 `SendLockCorrection` / `Client_CorrectLocks` 同级。只看到命令那一行、后面没有，最常见的原因是那一端的日志级别没抬起来：**两端窗口都要 `Prediction.Log 1`**（上面的验收步骤第 1 步就是这么写的，实机上容易只开一端）。
 
 ### 2.7 动画通知拆分（设计 5.9a）
 
@@ -398,11 +505,100 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - 验收：特效 / 音效不再"两端各播一次"；时机类在客户端提前执行后与服务器结果一致（位移、连段推进、霸体三方都对齐，客户端那一半由本项补齐）；判定标准只有一条——**"这个通知在客户端提前执行了，会不会让某个量进入服务器可能不同意的值？"**（设计 5.9a）。
 - 说明：这一项改的是现有实现，开关管不到，必须单独提交、单独回归。
 
+**已落地（2026-10-10）**——**全部是蓝图改动，由开发者执行完成**；无 C++ 改动、无编译、无新增 RPC。实机确认运行正常。
+
+**一条口径更正（先看）**：本节计划原文有两处与本次实际执行不符，按 2.0.4① 的闭环（2026-10-10 开发者口径）与已定事项 40 更正：
+
+1. "客户端那一半由本项补齐"**不成立**——除 `AN_PreInput` 外，时机类的客户端那一半都不是本项补的，而是随预测接入**新加**（2.0.4① 的闭环结论：现行全部是权威门控，客户端那一半一律是新加的）；
+2. 验收原文里"时机类在客户端提前执行后与服务器结果一致（位移、连段推进、霸体三方都对齐）"因此**顺延到 3.1 / 3.3 / 3.4**——本项的验收是下面那四条。
+
+**判定表**（本项的产物：18 个有通知的接口逐条定类，`I_GiveChakra` / `I_MakeDamage` 无通知、不在此表）：
+
+| 接口 | 类别 | 现行 | 2.7 | 客户端那一半落在哪 |
+| --- | --- | --- | --- | --- |
+| `I_StartPreInput` | 时机类 | 权威 | **改** | **2.7 本项**（只补 `bPreInputLock`） |
+| `I_ChangeAttack` | 时机类 | 权威 | 不动 | 3.3 |
+| `I_ChangeState` | 时机类 | 权威 | 不动 | 3.1（只写标记、不建键，已定事项 22） |
+| `I_MakeMove` / `I_LockTargetToward` | 时机类 | 权威 | 不动 | 3.4（`TargetToward` 是"锁瞬间的意图快照"，与位移同片） |
+| `I_StartHitCheck` | 时机类 | 权威 | 不动 | 3.3 / 阶段四（`bSuccessHit` 的本地复位） |
+| `I_ChangeDamageValue` | 时机类 | 权威 | 不动 | 阶段四（本地命中判定要读它写的伤害参数） |
+| `I_SetGrab` / `I_StopGrab` | 时机类 | 权威 | 不动 | 阶段四（本地命中判定要拿 `MyGrabPoint` 传给受害方） |
+| `I_HitJump`（`BP_Menma`） | 时机类 | 权威且 `successHit` | 不动 | 阶段四（写的是 `MySkill`，随命中预测） |
+| `I_ChangeBox` | 时机类 | 本地控制（→ `ServerChangeBox` → `Mult_ChangeBoxSize`） | 不动 | 3.5（设计 5.9b 的碰撞框本地先行） |
+| `I_ChangeGravity` | 时机类 | 无判定（本地物理量） | 不动 | 已在两端 ✓ |
+| `I_PlaySound` | 纯权威类 | 无判定（两端各播一次） | **改** | —— |
+| `I_CameraShake` | 纯权威类 | 无判定（两端各晃一次） | **改** | —— |
+| `I_SpawnSE` / `I_SetOtherPauseState` / `I_SpawnAttacker` / `I_Summon` | 纯权威类 | 权威 | 不动（已合规） | —— |
+
+`Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 本就是"服务器 Tick 触发 + `NetMulticast` 到各端"，设计 5.9a 那条"兼具表现与状态、不能当纯表现处理"的注**已满足**，本项不动。
+
+**蓝图改动表**（三处，都在 `BP_Character` 的接口实现里）：
+
+| 蓝图 | 位置 | 改动 | 为什么 |
+| --- | --- | --- | --- |
+| `BP_Character` | `I_PlaySound` | 新建一个 **Multicast 自定义事件**（`Replicates` = Multicast、`Reliable` 默认勾选），把原来的 `PlaySound2D` 连引脚设置一起搬进去；接口实现改成两分支——Authority → 调该事件（入参透传）、**Remote → 空着不接节点** | 纯权威类：客户端不再自行执行，由服务器触发、多播到各端本地播放（设计 5.9a / 已定事项 42） |
+| | `I_CameraShake` | 同上：现有晃动节点搬进一个新的 Multicast 事件，Authority 分支调它、**Remote 分支空着** | 同上 |
+| | `I_StartPreInput` | Authority 分支（调 `StartPreInput`）不动；**新增 Remote 分支**：`Set bPreInputLock = false` | 时机类的客户端那一半（本项唯一一处）。**远端不调 `StartPreInput()`**——它连 `TryTargetToward` 一起清零，而那个量在客户端是本地输入意图（`Move()` 每帧写它并上报服务器，`C_Character.cpp:320-322`；`C_Character.h:199-200` 的注释就是为此把门留给调用方） |
+
+盘点文档对应三行（`BlueprintSideCallSiteInventory.md` 的 `I_PlaySound` / `I_CameraShake` / `I_StartPreInput`）已按改后流程回填。
+
+**三处判断**（已定事项 40–42）：客户端那一半的分期与 2.0.4① 闭环（40）、分发机制用蓝图 Multicast 事件而非 C++ `Mult_*`（41）、音效/晃屏服从设计的权威门控口径（42——含"播放本来就是本地的、改的只是触发点"与那份"自己角色晚一个 RTT"的代价）。
+
+**验收**：
+
+1. **主判据（实机）**：一局对战，双方角色的音效与晃屏**各端各出一次、时机与改造前一致**——重点看客户端窗口：敌方角色的音效/晃屏照旧 ⇒ 多播那一跳通了（不通则客户端会直接少掉敌方角色的音效）。**已通过（2026-10-10，开发者实机运行正常）**。
+2. **结构判据**：阶段二里"两端各播一次"与"服务器分发"在观感上不可区分（预测未接入时，自己的动画本来也是等复制的状态到了才跑），真正可观察的差异要等 3.1 的本地先行；本项在阶段二的取证靠第 1 条加"改后图里 Remote 分支为空"。
+3. **`I_StartPreInput`**：客户端 `Prediction.Draw 1` 的 `locks:` 行——`AN_PreInput` 一过 `bPreInputLock` 就变 0 且与服务器一致（不再等下一次普攻 / 受击被 2.5 的更正通道拉回）。**阶段二无影响项**：客户端此时不读这个锁——2.5 那条"按设计保留的缺口"（预输入窗口打开后客户端锁与服务器不一致）就此消失。此项可在后续任意一局里顺带看一眼。
+4. 本项无开关（改的是现有实现），`Prediction.Enabled` 0 / 1 都不参与。
+
 ### 2.8 阶段验收
 
 - 一局完整对战：无预测、无回执，表 / 锁两条通道工作，行为与表现与改造前一致。
 - `Prediction.Enabled` 0 / 1 两种状态行为一致（本阶段两者都等于"无预测"）。
 - 2.0 的蓝图清单归档在 `BlueprintSideCallSiteInventory.md`（盘点已完成，见 2.0）。
+
+**收口清单（2026-10-10 汇总）**——2.1–2.7 各自验收项的并集，照此跑一局（A / B 可同一局穿插，C 里 C1–C3 在同一局内做、C4 / C5 各另起一轮）。任何一项不对就先停下报告，本清单之外不做新改动。
+
+准备：两窗口、其中一个监听服务器开局；**两端各敲** `Prediction.Log 1` 与 `Prediction.Draw 1`（2.5 / 2.6 的多数日志是 Verbose，只开一端会看成"没有后续"，见 2.6 末尾那条操作提醒）；`Prediction.Enabled` 保持默认 1。
+
+**A. 三条通道**（表 = 2.1 + 2.4，锁 = 2.5，回执 = 2.6）。"服务器"指服务器窗口日志（`SendLockCorrection` / `SendPredictionResolve`），"客户端"指客户端窗口的日志与 `Prediction.Draw` 的 `locks:` 行。
+
+| # | 操作 | 断言 | 出自 |
+| --- | --- | --- | --- |
+| A1 | 各类操作各来一次：受击 / 替身 / 一技能 / 二技能 / 秘卷 / 通灵 / 奥义、抓取、击飞 | `refs:` 行 `authority:` 三项全 `yes`；每条表下面那行 `live` 与表逐字段相等；**客户端 `live` 行 == 服务器 `live` 行**（含 `enemyPS` 那张表） | 2.1 / 2.4 验收 1（已定事项 23 在此关闭；**2026-10-10 那个红方不能转向的缺陷就是靠这一对照抓出来的**，见 2.4 末尾"缺陷与修复"） |
+| A2 | 全程盯 `Prediction.Draw` 的键表 / 记录表 | 恒空（本阶段无预测） | 2.1 |
+| A3 | 客户端按一次普攻 | 服务器 `mask 3 values 3`；客户端 `bPreInputLock=1 bAttackInputLock=1` | 2.5 步骤 2 |
+| A4 | 让一段普攻走完（`AN_ChangeAttack` → `ChangeAttack(0)`） | 服务器 `mask 1 values 0`；客户端 `bAttackInputLock=0` | 2.5 步骤 3 |
+| A5 | 被对方打断（平推 / 击飞 / 抓取任一） | 服务器 `mask 1 values 0`（`PlayerStateReset`） | 2.5 步骤 4 |
+| A6 | 己方攻击框碰到对方，随后开始下一次攻击 | 先 `mask 4 values 4` → 客户端 `bSuccessHit=1`；下一次攻击开始（`I_StartHitCheck`）→ `mask 4 values 0` | 2.5 步骤 5 |
+| A7 | **拒绝场景**：客户端敲 `Prediction.DebugLock 1`（只写本地）→ 让对方把自己打成僵直 / 击飞 → 按普攻 → 再立刻按一次 | 服务器 `mask 1 values 0`（拒绝路径的补发）→ 客户端 `bAttackInputLock=0`；**随后那次普攻能正常出手** | 2.5 步骤 6（3.3 闸门 1 直接依赖这条） |
+| A8 | 客户端 CD 已好、状态常态时敲 `Prediction.DebugKeyedSkill 1` | 客户端 `locally built key 900001 ...`；服务器 `SendPredictionResolve: ... result 0 packed ...`；客户端 `Client_ResolvePrediction: ...`，**之后无任何结算 / 回滚日志**（键表为空，走 3.4.5 静默返回）；`packed` 高 4 位 = 服务器 `CharacterState`、低 4 位 = `MySkill` | 2.6 步骤 1 |
+| A9 | 让一技能处于 CD 中再敲一次 | 两端同样两条日志，`result 1` | 2.6 步骤 2 |
+
+**B. 行为与表现**（2.1 / 2.2 / 2.4 / 2.7）
+
+| # | 操作 | 断言 | 出自 |
+| --- | --- | --- | --- |
+| B1 | 一整局内所有动作来一遍（普攻连段 / 替身 / 技能 / 秘卷 / 通灵 / 奥义 / 抓取 / 受击 / 击飞 / 保护） | 手感与改造前逐段一致（预输入窗口位置一动没动）；血条 / 查克拉条 / 五个冷却、动画状态机、移动拦截照常 | 2.2 / 2.4 验收 2 |
+| B2 | 打到分出胜负或时间耗尽 | 无属性不同步；无 Warning 刷屏 | 2.4 验收 3 / 2.1 |
+| B3 | 客户端窗口里听自己与敌方角色的音效、看晃屏 | 照旧。**本阶段与改造前不可区分**——两侧动画本来都随服务器状态走，多播只把触发点挪到服务器；判别点在 3.1 之后（已定事项 42） | 2.7 验收 1 |
+| B4 | 顺带盯 `locks:` 行的 `bPreInputLock` | `AN_PreInput` 一过就变 0，与服务器一致（2.5 那条"按设计保留的缺口"已消失） | 2.7 验收 3 |
+
+**C. 开关与压测**
+
+| # | 操作 | 断言 | 出自 |
+| --- | --- | --- | --- |
+| C1 | 服务器敲 `Prediction.ForceReject 1` → 客户端敲 `Prediction.DebugKeyedSkill 1` → 归 0 | 服务器 `... rejects the keyed request (skill 1) without writing anything`；`MySkill` 与世界状态不变；客户端仍收到 `result 1` | 2.6 步骤 3 |
+| C2 | 服务器敲 `Prediction.DropResolve 1` → 敲一次 → 归 0 | 服务器 `... drops the resolve for key ...`；客户端**没有** `Client_ResolvePrediction` | 2.6 步骤 4 |
+| C3 | 不带键：`Prediction.DebugSkill 1`（或正常按键） | 服务器没有任何 `SendPredictionResolve` | 2.6 步骤 5 |
+| C4 | `Prediction.Enabled 0` 再跑一轮（默认 1 跑完之后的第二轮） | 行为逐位一致。开关只管预测接入点（本阶段还没有），**表 / 锁 / 回执三条通道与 2.7 的表现改动都不受它管**——0 / 1 的差别要等 3.1 才出现 | 2.8 第二条 |
+| C5 | 两端各敲 `Net PktLag=100`，再跑一轮完整对战 | 表 / 锁 / 回执照旧工作；无卡输入、无残留；音效 / 晃屏的时点与改造前一致。测完 `Net PktLag 0`（想更狠可叠 `Net PktLoss=2`） | 工具表"阶段二起" |
+
+**验收通过（2026-10-10，开发者实机）**——清单跑完，含 2.4 缺陷修复后的红方复跑。**阶段二就此收口**：表 / 锁 / 回执三条通道就位，行为与表现与改造前一致，`Prediction.Enabled` 0 / 1 行为一致——与"阶段总览"里阶段二那一行"结束时的状态"相符。
+
+两条记录上的交代：**2.3 与 2.4 此前只有"已落地、编译通过"，没有单独的验收记录**（2.4 的验收 1 甚至没正式跑过——红方那一处缺陷就是它的第一次真正暴露）；两项的验收项都由本清单关闭。阶段二期间落在工作区的改动没有别的未验项：2.4 末尾那处修复（已定事项 43）是 2.8 清单之后唯一的阶段二改动，已在红方复跑中确认。
+
+**下一项**：阶段三切片 **3.1（技能一）**（见 3.1 章节与已定事项 40 的落点表）。
 
 ---
 
@@ -538,6 +734,17 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 30 | 摘除逐属性复制时，`Replicated` 说明符去不去掉——设计 5.2b 只对 `AC_Character` 写了"可一并去掉"，`AC_PlayerState` 那一栏只说"UPROPERTY 声明保留" | **两处都去掉**（共七个属性）。说明符留着而 `DOREPLIFETIME` 已删，等于"名义上复制、实际不注册"：读代码的人无从判断哪个是真的，也没法靠声明看出"这批属性只走表"。`UPROPERTY` 一律保留（反射 / GC / 蓝图读写照旧）；`Team` 的 `ReplicatedUsing = OnRep_Team` 与四个 CD 时间戳都不动 | 5.2b / 2.4 |
 | 31 | 2.4 的验收 1 要"客户端打印表，与服务器打印真实属性"逐字段比，验收工具放哪 | **扩展已有的私有 `Prediction.Draw`**（`DrawPredictionDebug`，2.1 建的），每条表下面加一行宿主的 `live` 值。理由：设计 3.7 冻结了两个组件的接口、扩展原则写明"必须新增接口时追加版本号"，而 `Prediction.Draw` 是私有成员、加行不改任何签名；且"表 vs 真实属性"在同一屏、同一实例上直读，不用跨窗口手抄。也替 2.6 的调试工具定了去向——同放这里 | 2.4 / 3.7 / 2.1 |
 | 32 | 敌方 PS 的绑定只在 `InitializePredictionContext` 里做，而 Tick 的重试门槛是 `CanPredict()`（只看自身三项）——自身到齐后不再重试，首次初始化若早于 `Team` 或早于对手 PS 出现，`EnemyPSAuthority` 会一直空着 | **在 `AC_Character::MyInitialize` 末尾补一次 `InitializePredictionContext()`**：该函数正是"PS 与 Team 都就绪"的时刻（服务器在 `SpawnPawnToPlayer` 里、客户端在 `OnRep_PlayerState` / `OnTeamChanged` 里），重复调用安全（重绑即覆盖，已定事项 21），不需要新接口。本工程的生成顺序（`AssignTeams` 先 `SetTeam` 再 `SpawnPawnToPlayer`，且要求两名玩家都在场）让两端都能在这一刻找齐对手；不补这一手的话，`Prediction.Draw` 的 `enemyPS` 会一直显示 `no`，阶段三的 `Enemy.PS.*` 预测也无从落地 | 3.4.1 / 2.1 / 2.4 |
+| 33 | `Server_Attack` 拒绝路径的补发，掩码里给不给 `bit0`——服务器在拒绝路径上**并没有写** `bAttackInputLock` | **给**，三个出口统一 `bit0｜bit1`（`LockBitsAttackRequest`）。掩码的语义定为"本次更正**声明**了哪几个锁"，而不是"服务器刚写过哪几位"：拒绝路径没写锁，但那一次下发的正是"你本地那次置位无效"这个结论，不声明 bit0 就送不出去，本地闸门 1 会自锁（设计 2.6.1）。接受路径的 bit0 也由这一次一并覆盖——设计 2.8 把"接受时"与"末尾补发"列成两行，落点是同一个调用点 | 2.8 / 2.6.1 / 2.5 |
+| 34 | `bSuccessHit` 的复位怎么落——C++ 里没有任何复位路径（设计 5.6 点明），而 5.6 又说"复位点与读取点同处" | **按开发者核对后的蓝图事实执行：写它的全工程只有两处——`OnAttackBoxOverlap` 置真（C++，本包已加下发）与 `BP_Character` 的 `I_StartHitCheck` 置假（权威分支）；读取点 `BP_Menma` 的 `I_HitJump` 只读不写**。所以 5.6 那句"读取点消费掉它之后随即复位"的前提不成立；本包按同节"**不引入新的复位时机**"保留既有复位点（`I_StartHitCheck`），新增 `AC_Character::ResetSuccessHit()`（`BlueprintCallable`，函数体自带 `HasAuthority()` 守卫）作为它的下发形态，蓝图把那条 `Set SuccsessHit = false` 换成它。让蓝图直接写 `bSuccessHit` 会绕开更正通道，客户端那一份永远停在真（5.6：客户端只经 `Client_CorrectLocks` 接收）；在 `I_HitJump` 之后另加复位等于新增复位时机，与 5.6 冲突，故不做。函数体不做"已经是假就跳过"的提前返回——重复下发幂等 | 5.6 / 2.8 / 2.5 |
+| 35 | 2.5 的验收要求"拒绝场景验证补发让客户端锁复位"，但客户端要到 3.3 才在输入瞬间本地置位——此刻两端锁值恒等，补发不可观察（发下去的就是客户端已有的值） | **新增调试命令 `Prediction.DebugLock`**（本地写、不发服务器）制造"本地值 ≠ 服务器值"。它是 3.3 之前唯一能观察补发的办法；放 `C_PredictionComponent.cpp` 的调试命令区（已定事项 31 定下的去向），不新增公开接口，`Prediction.Log 1` 下与 `SendLockCorrection` / `Client_CorrectLocks` 两条 Verbose 日志（都带角色名）成对对照 | 2.5 / 2.6.1 / 3.3 |
+| 36 | 客户端上的敌方角色（模拟代理）的预测组件永远拿不到 `Controller`，`CanPredict()` 恒为假，于是每帧重试一次初始化、每帧记一行 Verbose，`Prediction.Log 1` 之下刷满屏（开发者实机验收时提出） | **保留重试，把日志改成一次性**。引擎事实：`Controller` 不复制，远端 `PlayerController` 只发往拥有者连接（`bOnlyRelevantToOwner`）——所以客户端上非己方角色没有 Controller，这不是配置错。重试本身无害（`InitializePredictionContext` 在绑定前就返回）且"就绪后再调一次"正是设计 3.4.1 的形状，故不动；逐帧记 Verbose 会把真正要看的锁 / 回执行淹掉，故两处"还没就绪"的日志改成每个组件只记第一次（新增 `bContextPendingLogged`，成功时重新武装）并带上角色名。**给阶段三的一条提醒**：客户端上敌方角色的预测组件是惰性的，不要往它上面接预测（`Prediction.Draw` 也只画本地控制角色） | 3.4.1 / 3.2 / 2.1 / 2.5 |
+| 37 | 2.6 的验收要"用一条调试命令发送**带键**请求"，但此刻没有任何 RPC 能带键（三个可带键的 RPC 都要到切片 3.x 才拿到键参数）——是造一条调试专用 Server RPC，还是提前落地设计里的键参数 | **复用 `Server_ChangeSkillState`，不新增调试 RPC**：设计 3.4.2 的挂载约束明写"只有三个 RPC 可以带键……**不为任何其他 RPC 新增预测键参数**"，造调试 RPC 同时违反它和设计 2.11.1 的接口面。把设计指定的键参数**提前**落到这条 RPC 上（3.1 本来就要做），五个生产调用点传空键 → 服务器按设计 3.4.2 末行"`KeyID == 0` 按非预测请求处理"照常执行、不回执，行为与改造前逐位一致。切片 3.1 只需把实参换成 `GetActivePredictionKey()` | 2.11.1 / 3.4.2 / 2.11.4 / 2.6 |
+| 38 | `ConfirmedStatePacked` 的打包由谁做——设计写了公式（高 4 位 `CharacterState`、低 4 位 `MySkill`），但接受 / 拒绝两条路径与三个调用点各写一遍就是重复 | **收在 `SendPredictionResolve` 内部**（服务器侧唯一出口）。调用点只剩"拒绝 / 确认"两态；`KeyID == 0`（没有键可回执）与 `DropResolve` 两道闸门也在这里。契约写进头文件：必须在**写权威值之后**调用，确认时打包的才是被接受的那个状态 | 2.11.1 / 2.11.4 / 2.6 |
+| 39 | `Prediction.ForceReject` / `DropResolve` 的编译范围与作用域（工具表的约定是"只在非 Shipping 构建里编译"） | **两条 cvar 的定义与声明整段包在 `#if !UE_BUILD_SHIPPING` 里**，读取走两个恒定义的查询函数（Shipping 里恒 false），调用点不写条件编译。`ForceReject` **只作用于带键请求**——不带键的请求没有本地预测可回滚，拒掉只会让开关打开时玩不了（工具表原文即"对**带键**请求一律回 `Rejected`"）；`DropResolve` 只挡回执、不挡任何写入 | 2.6 / 2.10.1 / 3.4.5 |
+| 40 | 2.0.4① 留下的悬案（盘点文档说三个接口"权威时"才执行 vs 设计 2.4.4 / 5.9a 与笔记记作"两端各自执行"） | **以盘点文档为准**（开发者 2026-10-10 口径：写了"权威"就只有权威分支、写了"本地控制"就只有本地控制分支、什么都没写就是没有判定，描述的调用过程就是实际调用过程）。这三条**今天客户端都不执行**；推论同样适用于其余标"权威"的时机类——**客户端那一半一律是随预测接入新加，不是从现有实现里"拆"出来的**：`I_ChangeAttack` → 3.3、`I_ChangeState` → 3.1（只写标记、不建键，已定事项 22）、`I_MakeMove` / `I_LockTargetToward` → 3.4、`I_StartHitCheck` → 3.3 / 阶段四、`I_ChangeDamageValue` / `I_SetGrab` / `I_StopGrab` / `I_HitJump` → 阶段四、`I_ChangeBox` → 3.5。**2.7 自己补的只有 `AN_PreInput`（`I_StartPreInput`）的客户端那一半，且只补 `bPreInputLock`**——`TryTargetToward` 是服务器侧量（`Move()` 里它还是客户端的本地输入意图并逐次上报，`C_Character.cpp:320-322`），落到客户端会与本地意图打架。设计与笔记里"两端各自执行"的措辞按此更正为**现状描述错误、目标仍是两端都执行** | 2.0.4① / 2.4.4 / 5.9a / 2.7 |
+| 41 | 纯权威表现（`I_PlaySound` / `I_CameraShake`）的分发机制：蓝图 Multicast 自定义事件，还是新增 C++ `Mult_*` | **蓝图 Multicast 自定义事件**（`Replicates` = Multicast，`Reliable` 默认勾选——引擎事实，开发者确认）：把现有播放 / 晃动节点**原样搬进**新事件（引脚设置不动，表现逐位不变）、改动落在同一个图集、一笔提交一笔回退、不引入编译。走 C++ `Mult_*` 则必须把那两个节点在 C++ 里重写一遍，容易与蓝图当前设置分叉。设计 5.10 的"4 条 `Mult_*` 不加键"不受影响（新事件不带键、也不属于那 4 条）。**代价**：蓝图事件不能从 C++ 调——将来若需要从 C++ 触发这两条分发，得改走 C++ `Mult_*` | 5.9a / 5.10 / 2.7 |
+| 42 | 音效与摄像头晃动的触发口径：服从设计 5.9a 的"纯权威类"（服务器触发 + 多播分发），还是维持"各端随本地动画自行执行" | **服从设计**（开发者 2026-10-10 在被告知代价后维持原判）。澄清一句：**播放本来就是本地的**——`PlaySound2D` 与摄像头晃动只作用于本机，多播传的是**触发**不是声音本身；改的只是触发点从"各端自己的动画"挪到"服务器"。**代价**：触发要等一个网络来回——对**自己**角色的音效 / 晃屏，3.1 本地先行落地后从"零延迟"变成"一个 RTT"（阶段二两侧无差别：此时自己的动画本来也是等复制的 `MySkill` 到了才跑）；对**敌方**角色的音效基本无差（今天也是等复制的动画帧跑到通知才响）。局域网下单帧级、看不见；将来联网若觉得明显，升级路径是把它当"可预测表现"走 `RecordPresentation` 确认 / 回滚（设计 3.4.4 / 3.5），属阶段四。**不加门控的代价记在明处**：3.1 起，被拒绝 / 回滚的动作会留下一次假音效、假晃屏 | 5.9a / 3.4.4 / 3.5 / 2.7 |
+| 43 | 客户端要不要在 `BeginPlay` 里给权威值表填初值（设计 2.7.5 的"初始复制'相等即不触发 OnRep'"兜底） | **不填**（2026-10-10 缺陷修复，症状见 2.4 末尾"缺陷与修复"）。引擎对新复制 Actor 的顺序是"初始复制 → `OnRep` → `BeginPlay`"，客户端在 `BeginPlay` 里填 = 把刚收到的权威值覆盖成本地默认值，而 `OnRep` 只在变化时来——权威值再也回不来（红方客户端 `Toward` 卡在 `true`，`Move()` 发出的转向请求因此永远不成立）。**代码侧两条**：`RefreshTableFromHost` 只允许权威侧写表（"客户端从不写表"是本组件头文件原有的话，实现只差这一处）；客户端那份表的初值改由 `UC_PredictionComponent::BindAuthorityValueHost` 的**绑定即同步一次**负责（表首次到达时委托还没绑，值在表里、没人写回本地属性）。另外，`OnRep` 被跳过本来也只发生在"收到的值 == 本地当前值"，那时表里已经是服务器的值——兜底从一开始就不必要 | 2.4 / 2.7.5 / 2.8 |
 
 ---
 

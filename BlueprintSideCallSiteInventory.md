@@ -19,16 +19,16 @@
 - **BP_Character**  
   继承 `C_Character`。蓝图实现 `BPI_Character` 的接口
 
-  - `I_PlaySound`：调用 `PlaySound2D`
+  - `I_PlaySound`：权威时调用一条 Multicast 自定义事件（`Replicates` = Multicast、`Reliable`；事件体内就是原来的 `PlaySound2D`，引脚设置原样）；客户端不再自行播放（原为无判定、两端各自播放。2026-10-10 按计划 2.7 改，开发者执行）
   - `I_SetOtherPauseState`：权威时用传入的 `bool` 值作为参数调用 `SetOtherPauseState`
-  - `I_CameraShake`：摄像头晃动
+  - `I_CameraShake`：权威时调用一条 Multicast 自定义事件（同上形状，事件体内是原来的晃动节点）；客户端不再自行执行（原为无判定、两端各自执行。2026-10-10 按计划 2.7 改，开发者执行）
   - `I_ChangeGravity`：根据参数设置移动组件重力标度为 0 或 1
   - `I_ChangeState`：权威时用传入的 `State` 作为参数调用 `ChangeState`
   - `I_Summon`：根据 `SummonIndex` 调用 `I_SpawnAttacker` 生成攻击体，0 生成查克拉秘卷，1 生成通灵魔法师
   - `I_SpawnAttacker`：权威时根据传入的攻击体类型、x、y、z 和 `Size` 生成攻击体，并将自身（即角色）设置为其 `Owner`，然后调用 `StartUse` 启用
   - `I_StopGrab`：权威时将自身抓取点设置为无效
   - `I_SetGrab`：权威时根据自身的 `Toward` 和传入的 x、y、z 设置自身抓取点的位置并置为有效，如果无有效抓取点则生成并设置有效，存储为自身抓取点
-  - `I_StartHitCheck`：权威时将 `SuccsessHit` 置为 `false`
+  - `I_StartHitCheck`：权威时调用 `ResetSuccessHit`（原为直接将 `SuccsessHit` 置为 `false`；这里写的 `SuccsessHit` 与 `I_HitJump` 读的 `successHit` 是同一个 C++ 属性 `AC_Character::bSuccessHit`，拼写差异是蓝图侧节点显示名，开发者 2026-10-10 核对；全工程写它的只有本行与 `C_Character::OnAttackBoxOverlap`，`I_HitJump` 只读不写。本行已于 2026-10-10 按计划 2.5 改为调用 `ResetSuccessHit`，开发者确认，详见开发计划 2.5）
   - `I_GiveChakra`：调用 `AddChakra`
   - `I_MakeDamage`：用传入的 `Type`、`Effect`、`Value`、`Time`、`State`、`GrabPoint` 作为参数调用 `BeDamaged`
   - `I_LockTargetToward`：权威时用 `TryTargetToward` 为 `TargetToward` 赋值
@@ -36,7 +36,7 @@
   - `I_ChangeBox`：本地控制时用传入的 `Size`、`Offset`、`Type` 作为参数调用 `ServerChangeBox`
   - `I_ChangeDamageValue`：权威时用传入的造成伤害相关参数为 `Type`、`Effect`、`Value`、`Time`、`State` 赋值
   - `I_MakeMove`：权威时用传入的 `Offset` 和本地的 `TargetToward` 调用 `MakeMove`
-  - `I_StartPreInput`：权威时将 `bPreInputLock` 置 `false` 并将 `TryTargetToward` 置 0
+  - `I_StartPreInput`：权威时调用 `StartPreInput`（原为直接 `Set bPreInputLock = false` 与 `TryTargetToward = 0` 两条写；已于 2026-10-09 按计划 2.2 / 已定事项 24 换成调用 C++ 的 `StartPreInput()`，两条写的语义一起挪进了该函数，蓝图侧不再保留，开发者执行）；**非权威分支直接把 `bPreInputLock` 置 `false`**（2026-10-10 按计划 2.7 补的客户端那一半。**不调 `StartPreInput`**——那个函数会连 `TryTargetToward` 一起清零，而它在客户端是本地输入意图，见 `C_Character.cpp` 的 `Move()`）
   - `I_SpawnSE`：权威时根据传入的 `Offset` 和 `SEName` 和本地 `Toward` 调用 `SpawnBPSE`
 
 - **BPI_Character**  
