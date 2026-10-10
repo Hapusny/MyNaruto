@@ -47,6 +47,44 @@ TAutoConsoleVariable<int32> CVarPredictionLog(
 	FConsoleVariableDelegate::CreateStatic(&OnPredictionLogChanged),
 	ECVF_Default);
 
+// ---- 服务器侧调试开关（计划 2.6 工具表）----
+// 这两个只在非 Shipping 构建里编译：开关的"关"是安全态（等价于"未接入"）。
+// 读取走头文件里的 IsPredictionForceRejectEnabled / IsPredictionDropResolveEnabled（Shipping 里恒 false）
+#if !UE_BUILD_SHIPPING
+// 对【带键】请求一律回 Rejected 且不写权威值 —— 回滚路径 100% 可复现。
+// 不带键的请求不受影响：它们没有本地预测可回滚，拒掉只会让开关打开时玩不了
+TAutoConsoleVariable<int32> CVarPredictionForceReject(
+	TEXT("Prediction.ForceReject"),
+	0,
+	TEXT("Server side: reject every KEYED state request without writing anything, so the rollback path can be reproduced 100%. Unkeyed requests are unaffected. Non-shipping builds only."),
+	ECVF_Default);
+
+// 不回执，也不写任何"已发送"的痕迹 —— 用来验证客户端的超时兜底（设计 2.10.1 / 3.4.5，默认 2.0s）
+TAutoConsoleVariable<int32> CVarPredictionDropResolve(
+	TEXT("Prediction.DropResolve"),
+	0,
+	TEXT("Server side: never send the prediction resolve back, so the client prediction timeout path can be verified. Non-shipping builds only."),
+	ECVF_Default);
+#endif
+
+bool IsPredictionForceRejectEnabled()
+{
+#if !UE_BUILD_SHIPPING
+	return CVarPredictionForceReject.GetValueOnGameThread() != 0;
+#else
+	return false;
+#endif
+}
+
+bool IsPredictionDropResolveEnabled()
+{
+#if !UE_BUILD_SHIPPING
+	return CVarPredictionDropResolve.GetValueOnGameThread() != 0;
+#else
+	return false;
+#endif
+}
+
 namespace
 {
 	// BindStateLifecycle 支持的 StateName（设计 3.4.2）：带前缀、且落在 AC_PlayerState 上的可预测属性。
@@ -224,7 +262,12 @@ bool UC_PredictionComponent::InitializePredictionContext()
 	SelfCharacter = Cast<AC_Character>(GetOwner());
 	if (SelfCharacter == nullptr)
 	{
-		UE_LOG(LogPrediction, Warning, TEXT("InitializePredictionContext: the prediction component is not owned by an AC_Character"));
+		//日志只记第一次（理由见下）——这一支是配置错，同样不该逐帧刷
+		if (!bContextPendingLogged)
+		{
+			bContextPendingLogged = true;
+			UE_LOG(LogPrediction, Warning, TEXT("InitializePredictionContext: %s is not owned by an AC_Character"), *GetName());
+		}
 		return false;
 	}
 
@@ -235,9 +278,19 @@ bool UC_PredictionComponent::InitializePredictionContext()
 	SelfController = Cast<AC_PlayerController>(SelfCharacter->GetController());
 	if (SelfPlayerState == nullptr || SelfController == nullptr)
 	{
-		UE_LOG(LogPrediction, Verbose, TEXT("InitializePredictionContext: PlayerState or PlayerController is not available yet; call again once it arrives"));
+		//每帧重试是设计（3.4.1）：客户端上 PlayerState / Controller 随后才到达。
+		//但有两类"永远等不到"的情况，日志因此只记第一次、并带上角色名：
+		//  a) 模拟代理角色（客户端上的敌方）：引擎不复制 Controller（远端 PlayerController 只发往
+		//     拥有者连接），所以它可以一直重试到结束——无害（本函数在绑定前就返回），但绝不能逐帧记日志；
+		//  b) 真出问题时，第一次那一行就够定位是哪个角色，不需要每秒 60 行
+		if (!bContextPendingLogged)
+		{
+			bContextPendingLogged = true;
+			UE_LOG(LogPrediction, Verbose, TEXT("InitializePredictionContext: %s is waiting for PlayerState / Controller; retrying every tick"), *GetName());
+		}
 		return false;
 	}
+	bContextPendingLogged = false;
 
 	// 己方两个宿主（设计 2.7.5：PS 上一个、Character 上一个）。重绑即覆盖，可安全重复调用
 	BindAuthorityValueHost(SelfPlayerState.Get(), SelfPSAuthority);
@@ -1112,6 +1165,19 @@ void UC_PredictionComponent::BindAuthorityValueHost(const AActor* HostActor, TOb
 	// TDelegate 是单绑定，重绑即覆盖（CreateDelegateInstance 会先析构旧的），重复调用不会累积；
 	// 且 UObject 版绑定持的是弱引用，权威值表组件被销毁后不会悬空执行
 	OutAuthority->OnAuthorityValueTableArrived.BindUObject(this, &UC_PredictionComponent::ApplyAuthorityValueTable);
+
+	// 绑定即同步一次（计划 2.4 的缺陷修复，2026-10-10）：表是 ReplicatedUsing，OnRep 只在【变化】时来，
+	// 而客户端上"首次到达"落在委托还没绑的空窗里 —— 引擎对新复制过来的 Actor 的顺序是
+	// 【先应用初始复制、再调 OnRep、最后才 BeginPlay】（DataChannel.cpp:3223 PostReceivedBunch ->
+	// :3237 PostNetInit；Actor.cpp:4124 在 PostNetInit 里才 DispatchBeginPlay），而本组件的绑定在
+	// BeginPlay（或其后每帧的重试）里做。值已经在表里了，只是没人把它写回本地属性：
+	// 在绑定的同一刻采用一次，把"订阅"补成"订阅 + 立即同步"。
+	// 只对复制副本（客户端）做：服务器上的表是从宿主刷出来的副本，反过来写会把宿主刚改过、
+	// 还没刷进表的值滚回去（例如 MyInitialize 刚写过 Toward、紧接着调 InitializePredictionContext）。
+	if (HostActor != nullptr && HostActor->GetNetMode() == NM_Client)
+	{
+		ApplyAuthorityValueTable(OutAuthority->AuthorityValueTable);
+	}
 }
 
 UC_AuthorityValueComponent* UC_PredictionComponent::ResolveAuthorityComponentForAttribute(FName AttributeName) const
@@ -1368,11 +1434,16 @@ void UC_PredictionComponent::FinishPredictionKey(uint32 KeyID, bool bConfirmed)
 	}
 }
 
-// ---- 调试命令（计划 2.3 的验收工具）----
+// ---- 调试命令（计划 2.3 / 2.5 / 2.6 的验收工具）----
 // 用途：绕过客户端的本地先行判定，直接向服务器发一次请求，用来在"不可行时机"制造请求，
 // 验证 2.3 搬进服务器的那些判据会拒绝、且不写值（此刻还没有预测键，拒绝表现为"世界状态不变"）。
+// Prediction.DebugLock 是 2.5 的验收工具：本地直接写锁，模拟第 3 阶段的"本地先行置位"，
+// 用来验证服务器的锁更正会把它覆盖回去。
+// Prediction.DebugKeyedSkill 是 2.6 的验收工具：本地临时构造一个键随技能请求发出去，
+// 走一遍 2.6 的回执通道（客户端 → 服务器 → Client_ResolvePrediction → 键不在表里，静默返回）。
+// 2.6 的两个开关（Prediction.ForceReject / DropResolve）在上面 cvar 区，是服务器侧的，不在这里。
 // 命令在敲它的那个实例里执行，取该实例自己的本地 PlayerController：
-// 局域网对战就在要测的那个客户端窗口的控制台里敲。2.6 的 Prediction.ForceReject / DropResolve 同放这里
+// 局域网对战就在要测的那个客户端窗口的控制台里敲
 namespace
 {
 	//取本实例的本地 PlayerController：GEngine->GetFirstLocalPlayerController 走的是 GameInstance 的
@@ -1391,7 +1462,7 @@ namespace
 		if (!PC)return;
 		const int32 Skill = FCString::Atoi(*Args[0]);
 		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugSkill: raw request Server_ChangeSkillState(%d)"), Skill);
-		PC->Server_ChangeSkillState(Skill);
+		PC->Server_ChangeSkillState(Skill, FPredictionKey());	//空键 = 非预测请求（本命令验的是 2.3 的判据，不是键）
 	}
 
 	void DebugRequestChakra(const TArray<FString>& Args, UWorld* World)
@@ -1402,6 +1473,47 @@ namespace
 		const int32 Chakra = FCString::Atoi(*Args[0]);
 		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugChakra: raw request Server_ChangeChakra(%d)"), Chakra);
 		PC->Server_ChangeChakra(Chakra);
+	}
+
+	//本地临时构造一个预测键、随一次技能请求发给服务器（计划 2.6 的验收工具）。
+	//键【不建在键表里】是有意的：要验证的正是"回执到达时键已不在键表"那条竞态（设计 3.4.5：静默返回）。
+	//服务器按 2.3 的校验分支处理（Prediction.ForceReject 打开时一律拒绝），再回 Client_ResolvePrediction
+	void DebugRequestKeyedSkill(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.Num() < 1)return;
+		AC_PlayerController* PC = GetLocalDebugPlayerController(World);
+		if (!PC)return;
+		const int32 Skill = FCString::Atoi(*Args[0]);
+
+		//ID 从一个固定基数往后数：与 CreatePredictionKey 的自增计数器互不干扰，日志里一眼能认出是调试键
+		static uint32 NextDebugKeyID = 900000;
+		FPredictionKey Key;
+		Key.KeyID = ++NextDebugKeyID;
+		Key.PredictionType = (uint8)EPredictionType::Skill;
+		Key.ClientRequestTime = 0.f;
+		Key.PredictiveConnectionKey = 0;	//0 = 本地生成：NetSerialize 会把真实 KeyID 写给服务器（设计 3.3.1）
+
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugKeyedSkill: locally built key %u (deliberately NOT registered in the key table) rides on Server_ChangeSkillState(%d)"), Key.KeyID, Skill);
+		PC->Server_ChangeSkillState(Skill, Key);
+	}
+
+	//本地直接写三个锁（计划 2.5 的验收工具）：只改本地那一份，不发服务器。
+	//客户端要到第 3 阶段才会在输入瞬间本地置位（设计 2.6.1），在那之前用它制造
+	//"客户端本地值 ≠ 服务器值"，服务器的锁更正（含 Server_Attack 拒绝路径的补发）必须把本地值拉回权威值
+	void DebugSetLocks(const TArray<FString>& Args, UWorld* World)
+	{
+		AC_PlayerController* PC = GetLocalDebugPlayerController(World);
+		if (!PC)return;
+		AC_Character* Char = PC->GetPawn<AC_Character>();
+		if (!Char)return;
+
+		//缺席的参数保持原值：Prediction.DebugLock 1 与 Prediction.DebugLock 1 1 0 都可以
+		if (Args.Num() > 0)Char->bAttackInputLock = FCString::Atoi(*Args[0]) != 0;
+		if (Args.Num() > 1)Char->bPreInputLock = FCString::Atoi(*Args[1]) != 0;
+		if (Args.Num() > 2)Char->bSuccessHit = FCString::Atoi(*Args[2]) != 0;
+
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.DebugLock: local locks set to attackInputLock %d preInputLock %d successHit %d (local only, nothing is sent to the server)"),
+			Char->bAttackInputLock ? 1 : 0, Char->bPreInputLock ? 1 : 0, Char->bSuccessHit ? 1 : 0);
 	}
 }
 
@@ -1414,3 +1526,13 @@ static FAutoConsoleCommandWithWorldAndArgs GDebugRequestChakraCommand(
 	TEXT("Prediction.DebugChakra"),
 	TEXT("Raw Server_ChangeChakra request, bypassing the local checks (plan 2.3 acceptance). Usage: Prediction.DebugChakra <0..4>"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DebugRequestChakra));
+
+static FAutoConsoleCommandWithWorldAndArgs GDebugRequestKeyedSkillCommand(
+	TEXT("Prediction.DebugKeyedSkill"),
+	TEXT("Send Server_ChangeSkillState with a locally built prediction key that is deliberately NOT in the key table, so the resolve channel and the silent-return race can be observed (plan 2.6 acceptance). Usage: Prediction.DebugKeyedSkill <1|2|4|5>"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DebugRequestKeyedSkill));
+
+static FAutoConsoleCommandWithWorldAndArgs GDebugSetLocksCommand(
+	TEXT("Prediction.DebugLock"),
+	TEXT("Write the three locks on the locally controlled character (local only, nothing is sent). Simulates the stage 3 local-first set so the server side lock corrections can be observed (plan 2.5 acceptance). Usage: Prediction.DebugLock [<AttackInputLock 0|1>] [<PreInputLock 0|1>] [<SuccessHit 0|1>]"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DebugSetLocks));

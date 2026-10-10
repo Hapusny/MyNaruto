@@ -140,6 +140,10 @@ void AC_PlayerController::PlayerStateReset()
 	GetPlayerState<AC_PlayerState>()->MySkill = 0;
 	GetPawn<AC_Character>()->LaunchState = 0;
 	GetPawn<AC_Character>()->bAttackInputLock = false;
+	//锁更正（计划 2.5 / 设计 2.8）：受击 / 抓取 / 击飞打断会解除普攻输入锁，客户端那一份要跟上 ——
+	//本地锁的复位只有这一条来源（设计 2.6.1）。本函数只在服务器上调用（伤害是权威的），
+	//也就是"服务器每一处写锁的位置"里的 PlayerStateReset 那一行
+	GetPawn<AC_Character>()->SendLockCorrection(AC_Character::LockBitAttackInputLock);
 	GetPawn<AC_Character>()->Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
 }
@@ -169,22 +173,39 @@ void AC_PlayerController::Server_ChangeCharacterState_Implementation(ECharacterS
 
 //服务器校验（设计 5.1 / 计划 2.3）：判据逐条对应 C_Character.cpp 的五个输入函数 ——
 //FirstSkill(1) / SecondSkill(2) / Scroll(4，秘卷) / Summon(4，通灵) / FinalSkill(5)
-void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill)
+//
+//回执接线（设计 2.11.4 / 计划 2.6）：带键请求的【每一个出口】都要回执一次，否则客户端只能等超时兜底。
+//写法与 2.5 的锁补发同一形状 —— 每条早退前面先发回执再返回。键无效（KeyID == 0）时 SendPredictionResolve
+//自己跳过：降级路径照常校验执行、不回执（设计 3.4.2 的约定），所以生产调用点传空键时行为与改造前逐位一致
+void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill, FPredictionKey PredictionKey)
 {
+	//Result 取值：0 = Confirmed，1 = Rejected（设计 2.11.1）
+	const uint8 RejectResult = 1;
+	const uint8 ConfirmResult = 0;
+
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	AC_Character* Char = GetPawn<AC_Character>();
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-	if (!PS || !Char || !GameState)return;
+	if (!PS || !Char || !GameState) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 
 	//五个输入函数共有的判据：状态是常态或保护态
-	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)) { SendPredictionResolve(PredictionKey, RejectResult); return; }
+
+	//调试开关（计划 2.6 工具表）：带键请求一律拒绝、且不写权威值 —— 回滚路径 100% 可复现。
+	//只作用于【带键】请求：不带键的请求没有本地预测可回滚，拒掉它只会让开关打开时玩不了
+	if (PredictionKey.IsValidKey() && IsPredictionForceRejectEnabled())
+	{
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.ForceReject: %s rejects the keyed request (skill %d) without writing anything"), *GetName(), TargetSkill);
+		SendPredictionResolve(PredictionKey, RejectResult);
+		return;
+	}
 
 	switch (TargetSkill) {
 	case 1:
-		if (Char->FirstSkillCDState != 0.f)return;
+		if (Char->FirstSkillCDState != 0.f) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 		break;
 	case 2:
-		if (Char->SecondSkillCDState != 0.f)return;
+		if (Char->SecondSkillCDState != 0.f) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 		break;
 	case 4:
 		//秘卷与通灵共用请求值 4（两者的 MySkill 都是 4、动画相同），靠 SummonIndex 分辨是哪一个：
@@ -192,18 +213,19 @@ void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill
 		//（角色 / PlayerController），设计 2.11.4 说明过跨 Actor 不保证保序 —— 但服务器侧的 I_Summon
 		//本来就要读 SummonIndex 决定生成哪一个，这个"先到"要求是原代码就有的，这里没有新增假设
 		if (Char->SummonIndex == 1) {
-			if (Char->SummonCDState != 0.f)return;
+			if (Char->SummonCDState != 0.f) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 		}
 		else {
-			if (Char->ScrollCDState != 0.f)return;
+			if (Char->ScrollCDState != 0.f) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 		}
 		break;
 	case 5:
 		//奥义的判据是满查克拉；清零由紧随其后的 Server_ChangeChakra(0) 完成（同一 Actor，保序）
-		if (PS->Chakra != 4)return;
+		if (PS->Chakra != 4) { SendPredictionResolve(PredictionKey, RejectResult); return; }
 		break;
 	default:
 		//不在客户端请求集内的取值一律拒绝（原实现是照单全收）
+		SendPredictionResolve(PredictionKey, RejectResult);
 		return;
 	}
 
@@ -220,6 +242,53 @@ void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill
 		else Char->LastScrollTime = Now;
 	}
 	//奥义不记时间戳：它消耗的是查克拉，不是 CD（与客户端 FinalSkill 一致）
+
+	//接受：回执放在写完之后 —— SendPredictionResolve 打包的是写后的状态（设计 2.11.1 的打包方式）
+	SendPredictionResolve(PredictionKey, ConfirmResult);
+}
+
+// ---- 预测回执通道（设计 2.11.1 / 2.11.4，计划 2.6）----
+// 服务器发、客户端收。服务器侧只有 SendPredictionResolve 一个出口；客户端落脚在组件
+// UC_PredictionComponent::ResolvePrediction（设计 3.4.5 的统一结算入口）
+void AC_PlayerController::SendPredictionResolve(const FPredictionKey& Key, uint8 Result)
+{
+	//降级路径：调用方没建键（KeyID == 0）就没有键可回执。服务器不来这一条的话，
+	//"客户端关掉预测"会被误判成"回执丢了"，超时兜底还会去翻一个不存在的键
+	if (!Key.IsValidKey())return;
+
+	//调试开关（计划 2.6 工具表）：不回执 —— 验证客户端的超时兜底（设计 2.10.1，默认 2.0s）
+	if (IsPredictionDropResolveEnabled())
+	{
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.DropResolve: %s drops the resolve for key %u (result %u); the client must fall back to the prediction timeout"),
+			*GetName(), Key.KeyID, Result);
+		return;
+	}
+
+	//ConfirmedStatePacked：高 4 位 CharacterState、低 4 位 MySkill（设计 2.11.1）。
+	//只有【确认】时客户端才消费它（校正本地非复制状态变量）；拒绝时客户端按权威值表与记录回滚，不看这个值
+	uint8 ConfirmedStatePacked = 0;
+	if (const AC_PlayerState* PS = GetPlayerState<AC_PlayerState>())
+	{
+		ConfirmedStatePacked = (uint8)(((uint8)PS->CharacterState << 4) | ((uint8)PS->MySkill & 0x0F));
+	}
+
+	UE_LOG(LogPrediction, Verbose, TEXT("SendPredictionResolve: %s key %u result %u packed %u"), *GetName(), Key.KeyID, Result, ConfirmedStatePacked);
+	Client_ResolvePrediction(Key.KeyID, Result, ConfirmedStatePacked);
+}
+
+void AC_PlayerController::Client_ResolvePrediction_Implementation(uint32 KeyID, uint8 Result, uint8 ConfirmedStatePacked)
+{
+	//这一行是"回执到达"的观察点（计划 2.6 的验收）：键不在键表里时，上面转交下去的结算会静默返回
+	//（设计 3.4.5 的竞态约定），日志里看到它就说明回执确实到了客户端、且走的是那条约定路径
+	UE_LOG(LogPrediction, Verbose, TEXT("Client_ResolvePrediction: %s key %u result %u packed %u"), *GetName(), KeyID, Result, ConfirmedStatePacked);
+
+	if (AC_Character* Char = GetPawn<AC_Character>())
+	{
+		if (UC_PredictionComponent* Prediction = Char->PredictionComponent)
+		{
+			Prediction->ResolvePrediction(KeyID, Result, ConfirmedStatePacked);
+		}
+	}
 }
 
 void AC_PlayerController::Client_SetWidgetTime_Implementation(int time)

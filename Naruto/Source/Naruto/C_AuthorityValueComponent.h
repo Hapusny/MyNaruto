@@ -66,7 +66,10 @@ protected:
 
 private:
 	// 从宿主（AC_PlayerState 填 PS 段 / AC_Character 填 Character 段）的真实属性刷新表。
-	// 服务器每帧在 PreReplication 里调用；客户端在 BeginPlay 里调用一次，
-	// 补上"初始复制相等即不触发 OnRep"留下的默认值（设计 2.7.5）。
+	// 服务器每帧在 PreReplication 里调用、BeginPlay 里再刷一次（单独跑时没有 PreReplication）。
+	// 客户端一律不写表（本函数第一行就挡掉 NM_Client）——计划 2.4 的缺陷修复，2026-10-10，
+	// 原设计 2.7.5 让客户端在 BeginPlay 里补一次，引擎顺序（初始复制 -> OnRep -> BeginPlay）下
+	// 那一次会把刚收到的权威值覆盖掉；客户端那份表的初值改由
+	// UC_PredictionComponent::BindAuthorityValueHost 绑定时的补采用负责。
 	void RefreshTableFromHost();
 };

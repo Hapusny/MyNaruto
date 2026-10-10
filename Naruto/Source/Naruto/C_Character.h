@@ -42,6 +42,8 @@ class NARUTO_API AC_Character : public ACharacter
 	//服务器校验（计划 2.3 / 设计 5.1）：技能请求被服务器接受时，由 PlayerController 写下权威 CD 时间戳。
 	//四个时间戳仍留在本类（设计 5.3：不加 UPROPERTY、不加 Replicated），服务器只写自己那一份，
 	//2.4 起由权威值表下发给客户端 —— 服务器不写的话，服务器自己的 CD 判据永远是"没在冷却"
+	//锁更正（计划 2.5 / 设计 2.8）：PlayerStateReset 写完 bAttackInputLock 之后也要走
+	//SendLockCorrection 把权威值发给客户端，那是 private
 	friend class AC_PlayerController;
 
 public:
@@ -199,6 +201,14 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void StartPreInput();
 
+	//复位命中标志（计划 2.5 / 设计 5.6）：bSuccessHit 是纯服务器侧的值，置位与复位都归服务器。
+	//蓝图里的读取点是 BP_Menma 的 I_HitJump（只读不写），复位点是 BP_Character 的 I_StartHitCheck
+	//（权威分支里那条 Set SuccsessHit = false，即下一次攻击的命中检测开始时）——本函数就是那条复位的
+	//下发形态，由蓝图改调它；客户端那一份只经 Client_CorrectLocks 到达，所以复位后随即下发。
+	//函数体自带权限判定（复位归服务器）：客户端调用直接忽略
+	UFUNCTION(BlueprintCallable)
+	void ResetSuccessHit();
+
 	//输入控制变量
 	UPROPERTY(BlueprintReadWrite)
 	bool bAttackInputLock = false;//普攻输入锁
@@ -216,6 +226,15 @@ public:
 	//命中判断
 	UPROPERTY(BlueprintReadWrite)
 	bool bSuccessHit = false;
+
+	//---- 锁更正通道（设计 2.8 / 5.5，计划 2.5）----
+	//三个锁都不加 Replicated、不进权威值表、不参与结算（设计 2.6.2）：服务器在每一处写锁之后，
+	//用这条 Client RPC 把权威值下发给拥有者客户端，客户端收到后直接覆盖本地那一份 —— 不记录、不结算。
+	//被拒绝的输入请求也靠它解除客户端已经本地置位的锁（设计 2.6.1 的核心）。
+	//位域（设计 2.8）：bit0 = bAttackInputLock、bit1 = bPreInputLock、bit2 = bSuccessHit；
+	//Mask 表示本次更正声明了哪几个锁，未置位的锁不动客户端那一份
+	UFUNCTION(Client, Reliable)
+	void Client_CorrectLocks(uint8 LockMask, uint8 LockValues);
 
 
 	//攻击数值
@@ -393,4 +412,22 @@ private:
 
 	//保护状态动画显示
 	bool bIsProtectedShow = false;
+
+
+	//---- 锁更正通道（设计 2.8 / 5.5，计划 2.5）----
+	//三个锁的位域。掩码的语义是"本次更正声明了哪几个锁"：绝大多数调用点就是"服务器刚写过的那几位"，
+	//唯一的例外是 Server_Attack 的拒绝路径 —— 它没写 bAttackInputLock，但必须声明 bit0，
+	//好把客户端本地置位的那一份拉回服务器值（设计 2.6.1：拒绝的表现就是这条更正）
+	//（Server_Attack 那三个出口的掩码见 LockBitsAttackRequest）
+	static constexpr uint8 LockBitAttackInputLock = 0x01;//bit0：普攻输入锁
+	static constexpr uint8 LockBitPreInputLock = 0x02;//bit1：预输入
+	static constexpr uint8 LockBitSuccessHit = 0x04;//bit2：命中标志
+
+	//Server_Attack 的三个出口统一发这两位：bPreInputLock 在函数开头无条件写过；bAttackInputLock 是
+	//"这次请求的锁声明"——被接受时写了它，被拒绝时没写但它必须被声明（理由同上）
+	static constexpr uint8 LockBitsAttackRequest = LockBitAttackInputLock | LockBitPreInputLock;
+
+	//按 Mask 读出三个锁的当前值并下发（设计 2.8）。服务器的每一处写锁点调用；
+	//Server_Attack_Implementation 末尾那一次覆盖接受与拒绝两条路径（设计 2.6.1）
+	void SendLockCorrection(uint8 LockMask);
 };

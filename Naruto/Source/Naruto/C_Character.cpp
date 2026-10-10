@@ -232,9 +232,8 @@ void AC_Character::ChangeAttack(int32 attack)
 		PS->CharacterState = ECharacterStateType::Normal;
 
 		bAttackInputLock = false;
-		return;
 	}
-	if (bPreInputLock) {
+	else if (bPreInputLock) {
 		//转向走 RPC（设计 5.8）：原来直调 Server_ChangeToward_Implementation
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -242,6 +241,11 @@ void AC_Character::ChangeAttack(int32 attack)
 		MyAttack = attack;
 	}
 	else bAttackInputLock = false;
+
+	//锁更正（计划 2.5 / 设计 2.8）：本函数是"连段结束"（attack == 0）与"预输入没被消费"（else）
+	//两条分支的写锁点，两条都只写 bAttackInputLock，掩码就给这一位。原来 attack == 0 直接 return，
+	//现在收口到函数末尾（语义不变）：三个分支共用这一次下发，与设计 2.8 的调用点表两行对应
+	SendLockCorrection(LockBitAttackInputLock);
 }
 
 void AC_Character::ChangeState(ECharacterStateType target)
@@ -359,7 +363,9 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	if (FirstSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1);
+		//键先传空：签名按设计 3.4.2 的挂载约束提前在 2.6 落地（三个可带键 RPC 之一），
+		//真正的键由切片 3.1 在输入点创建后填进来。空键 = 非预测请求：服务器照常校验执行、不回执
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1, FPredictionKey());
 		LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
 		BP_FirstSkillEffect();
 	}
@@ -377,7 +383,7 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	if (SecondSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2, FPredictionKey());
 		LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
 		BP_SecondSkillEffect();
 	}
@@ -395,7 +401,7 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		//顺序（计划 2.3）：技能请求排在查克拉清零之前。服务器的判据是"满查克拉才接受奥义"，
 		//清零先到的话服务器看到的就是 0 了 —— 两条请求在同一 Actor 上，同通道、按序到达
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5, FPredictionKey());
 		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
 		BP_FinalSkillEffect();
 	}
@@ -414,7 +420,7 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Server_SetSummonIndex(0);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4, FPredictionKey());
 		LastScrollTime = GameState->GetServerWorldTimeSeconds();
 	}
 }
@@ -432,7 +438,7 @@ void AC_Character::Summon(const FInputActionValue& Value)
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 		Server_SetSummonIndex(1);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4);
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4, FPredictionKey());
 		LastSummonTime = GameState->GetServerWorldTimeSeconds();
 	}
 }
@@ -480,8 +486,17 @@ void AC_Character::Server_Attack_Implementation()
 	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	//判空（设计 5.8）：下一行就要读 PS->CharacterState，原来没有任何判空
-	if (!PS)return;
-	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
+	//锁更正（设计 2.6.1 / 2.8）：本函数三个出口（含两条拒绝路径）都要在返回前按当时的最新锁值
+	//补发一次 —— 被拒绝时服务器并没有写锁，客户端本地那次置位靠这一次才被解除，
+	//否则本地闸门 1 会自锁（设计 2.6.1）。掩码两位的理由见 LockBitsAttackRequest
+	if (!PS) {
+		SendLockCorrection(LockBitsAttackRequest);
+		return;
+	}
+	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)) {
+		SendLockCorrection(LockBitsAttackRequest);
+		return;
+	}
 	if (bAttackInputLock == false) {
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
@@ -489,6 +504,8 @@ void AC_Character::Server_Attack_Implementation()
 		PS->Attack = PS->Attack + 1;
 		MyAttack = PS->Attack;
 	}
+	//被接受时的写锁下发也由这一次覆盖（设计 2.8 的第一行与第二行是同一个调用点）
+	SendLockCorrection(LockBitsAttackRequest);
 }
 
 void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)
@@ -496,6 +513,46 @@ void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)
 	if(TargetToward) Flipbook->SetRelativeRotation(FRotator(0.f, 0.f, -90.f));
 	else Flipbook->SetRelativeRotation(FRotator(180.f, 0.f, -90.f));
 	Toward = TargetToward;
+}
+
+void AC_Character::SendLockCorrection(uint8 LockMask)
+{
+	//按掩码读出当前值打包（设计 2.8）：掩码外的位留 0，客户端也只写掩码覆盖的锁
+	uint8 LockValues = (uint8)((bAttackInputLock ? LockBitAttackInputLock : 0)
+		| (bPreInputLock ? LockBitPreInputLock : 0)
+		| (bSuccessHit ? LockBitSuccessHit : 0));
+	LockValues = (uint8)(LockValues & LockMask);
+
+	UE_LOG(LogPrediction, Verbose, TEXT("SendLockCorrection: %s mask %u values %u"), *GetName(), LockMask, LockValues);
+	Client_CorrectLocks(LockMask, LockValues);
+}
+
+void AC_Character::Client_CorrectLocks_Implementation(uint8 LockMask, uint8 LockValues)
+{
+	//客户端：直接覆盖本地锁值（设计 2.6.1 / 2.8）—— 不建键、不记录、不做任何结算。
+	//只写掩码覆盖的锁：服务器没声明的那几位是客户端自己的本地先行值，不能拿服务器的旧值抹掉。
+	//普攻被拒绝时，本地那次置位就是靠这条更正解除的（本地锁的复位只有这一个来源）
+	if (LockMask & LockBitAttackInputLock)bAttackInputLock = (LockValues & LockBitAttackInputLock) != 0;
+	if (LockMask & LockBitPreInputLock)bPreInputLock = (LockValues & LockBitPreInputLock) != 0;
+	if (LockMask & LockBitSuccessHit)bSuccessHit = (LockValues & LockBitSuccessHit) != 0;
+
+	UE_LOG(LogPrediction, Verbose, TEXT("Client_CorrectLocks: %s mask %u values %u -> attackInputLock %d preInputLock %d successHit %d"),
+		*GetName(), LockMask, LockValues, bAttackInputLock ? 1 : 0, bPreInputLock ? 1 : 0, bSuccessHit ? 1 : 0);
+}
+
+void AC_Character::ResetSuccessHit()
+{
+	//复位点（设计 5.6 / 计划 2.5）：置位与复位都归服务器，客户端调用直接忽略。
+	//设计 5.6 那句"复位点与读取点同处"写在"读取点会消费它"的旧前提上，而蓝图的读取点
+	//（BP_Menma 的 I_HitJump）只读不写——真正的复位点是 BP_Character 的 I_StartHitCheck（权威分支）。
+	//本包按"不引入新的复位时机"保留这个既有复位点，只把它接进更正通道（已定事项 34）
+	if (!HasAuthority())return;
+
+	bSuccessHit = false;
+
+	//不做"已经是假就不下发"的提前返回：客户端那一份可能还停在真上（比如它收到的那次置位更正之后
+	//再没收到过别的），这次下发正好把它拉回来；重复下发是幂等的
+	SendLockCorrection(LockBitSuccessHit);
 }
 
 void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
@@ -507,6 +564,10 @@ void AC_Character::OnAttackBoxOverlap(UPrimitiveComponent* OverlappedComponent, 
 
 		//成功命中
 		bSuccessHit = true;
+
+		//锁更正（计划 2.5 / 设计 2.8）：命中标志的置位点。复位点见 ResetSuccessHit
+		//（蓝图 BP_Character 的 I_StartHitCheck 权威分支调用它，已定事项 34）
+		SendLockCorrection(LockBitSuccessHit);
 
 		//被攻击的对象受到伤害
 		Cast<AC_Character>(OtherActor)->BeDameged(DamageValue, DamageState,DamageType, Effect, EffectTime,MyGrabPoint);

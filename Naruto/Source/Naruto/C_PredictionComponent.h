@@ -23,6 +23,17 @@ extern TAutoConsoleVariable<int32> CVarPredictionEnabled;	// Prediction.Enabled£
 extern TAutoConsoleVariable<int32> CVarPredictionLog;		// Prediction.Log£º°Ñ LogPrediction Ì§µ½ Verbose
 extern TAutoConsoleVariable<int32> CVarPredictionDraw;		// Prediction.Draw£ºÆÁÉÏ»æÖÆ¼ü / ±ê¼Ç / Ëø / ±í
 
+// ---- ·şÎñÆ÷²àµ÷ÊÔ¿ª¹Ø£¨¼Æ»®"¹¤¾ßÓëµ÷ÊÔ¿ª¹Ø"±í£¬½×¶Î¶ş 2.6 ½¨£©----
+// ÕâÁ½¸öÖ»ÔÚ¡¾·Ç Shipping ¹¹½¨¡¿Àï±àÒë£¨¹¤¾ß±íµÄÔ¼¶¨£º¿ª¹ØµÄ"¹Ø"±ØĞëÊÇ°²È«Ì¬£¬µÈ¼ÛÓÚ"Î´½ÓÈë"£©¡£
+// ¶ÁÈ¡Ò»ÂÉ×ßÏÂÃæÁ½¸ö²éÑ¯º¯Êı£ºShipping ÀïºãÎª false£¬µ÷ÓÃµã²»±Ø×Ô¼ºĞ´Ìõ¼ş±àÒë¡£
+// cvar ¶¨ÒåÔÚ C_PredictionComponent.cpp µÄ¿ª¹ØÇø£¬C_PlayerController.cpp / C_Character.cpp ¶Á
+#if !UE_BUILD_SHIPPING
+extern TAutoConsoleVariable<int32> CVarPredictionForceReject;	// Prediction.ForceReject£º´ø¼üÇëÇóÒ»ÂÉ»Ø Rejected£¬ÇÒ²»Ğ´È¨ÍşÖµ
+extern TAutoConsoleVariable<int32> CVarPredictionDropResolve;	// Prediction.DropResolve£º²»»ØÖ´£¬ÑéÖ¤¿Í»§¶ËµÄ³¬Ê±¶µµ×£¨Ä¬ÈÏ 2.0s£©
+#endif
+bool IsPredictionForceRejectEnabled();
+bool IsPredictionDropResolveEnabled();
+
 // Ô¤²âÀàĞÍ£¨Éè¼Æ 3.3.2£©
 UENUM(BlueprintType)
 enum class EPredictionType : uint8
@@ -287,6 +298,11 @@ private:
 	UPROPERTY(Transient) TObjectPtr<AC_PlayerState> SelfPlayerState;
 	UPROPERTY(Transient) TObjectPtr<AC_PlayerController> SelfController;
 	UPROPERTY(Transient) TObjectPtr<AC_PlayerState> EnemyPlayerState;	// °´ Team ´Ó GameState->PlayerArray ¶¨Î»
+
+	// "ÉÏÏÂÎÄ»¹Ã»¾ÍĞ÷"ÕâÌõÈÕÖ¾Ö»¼ÇÒ»´ÎµÄ±ê¼Ç£¨2.5 ÑéÊÕÊ±·¢ÏÖ£©£ºÃ¿Ö¡ÖØÊÔÊÇÉè¼Æ£¨3.4.1£©£¬
+	// µ«È± PlayerState / Controller ÊÇÕı³£ÖĞ¼äÌ¬£¬ÖğÖ¡¼ÇÒ»ĞĞ Verbose »á°ÑÈÕÖ¾ÑÍµô¡£
+	// Ö»ÔÚµÚÒ»´ÎÊ§°ÜÊ±¼ÇÒ»ĞĞ£¨´ø½ÇÉ«Ãû£©£¬³É¹¦ÄÇÒ»´ÎÖØĞÂÎä×° ¡ª¡ª ÏÂ´ÎÕæµÄÊ§Ğ§Ê±»¹¿´µÃµ½
+	bool bContextPendingLogged = false;
 
 	// ---- ÈİÆ÷£¨Éè¼Æ 3.3£©----
 
