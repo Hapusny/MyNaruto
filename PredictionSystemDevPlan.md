@@ -417,9 +417,9 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | `C_Character.h` | `:42-47` | 友元注释补一句：`PlayerStateReset` 写完锁之后也要走 `SendLockCorrection`（private） |
 | | `:204-210` | 新增 `UFUNCTION(BlueprintCallable) ResetSuccessHit()`——设计 5.6 定案的复位点（已定事项 34） |
 | | `:227-237` | 新增 `UFUNCTION(Client, Reliable) Client_CorrectLocks(uint8 LockMask, uint8 LockValues)`，位域按设计 2.8 |
-| | `:415-432` | 私有：三个锁位常量（bit0 / bit1 / bit2）+ `LockBitsAttackRequest`（`Server_Attack` 三个出口统一发的两位，已定事项 33）+ `SendLockCorrection(uint8 LockMask)` |
+| | `:415-432` | 私有：三个锁位常量（bit0 / bit1 / bit2）+ `LockBitsAttackRequest`（`Server_Attack` 三个出口统一发的两位，已定事项 33）+ `SendLockCorrection(uint8 LockMask)`。**2026-10-11 修订：只有 bit0 了**（`= LockBitAttackInputLock`，见已定事项 52；bit1 常量保留、不再有调用点发它） |
 | `C_Character.cpp` | `:223-249` | `ChangeAttack`：`attack == 0` 的提前 `return` 收口到函数末尾（语义不变），三个分支共用末尾那一次 `SendLockCorrection(LockBitAttackInputLock)`——与设计 2.8 调用点表的"连段结束 / 预输入被消费"两行对应 |
-| | `:482-507` | `Server_Attack_Implementation`：两条早退改成"先补发再返回"的分支，函数末尾再加一次；三个出口统一发 `LockBitsAttackRequest`（已定事项 33） |
+| | `:482-507` | `Server_Attack_Implementation`：两条早退改成"先补发再返回"的分支，函数末尾再加一次；三个出口统一发 `LockBitsAttackRequest`（已定事项 33 —— **2026-10-11 起只含 bit0**，见已定事项 52） |
 | | `:516-555` | 新增三函数：`SendLockCorrection`（按掩码读当前值打包下发，Verbose 日志带角色名）、`Client_CorrectLocks_Implementation`（只覆盖掩码覆盖的锁 + Verbose 日志带角色名）、`ResetSuccessHit`（`HasAuthority()` 守卫 → 置假 → 下发 bit2） |
 | | `:556-569` | `OnAttackBoxOverlap`：`bSuccessHit = true` 之后下发 bit2（设计 2.8 的命中行） |
 | `C_PlayerController.cpp` | `:142-146` | `PlayerStateReset`：`bAttackInputLock = false` 之后 `SendLockCorrection(LockBitAttackInputLock)`（设计 2.8 的受击打断行） |
@@ -625,6 +625,60 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - **奥义**：这次输入**和别的技能一样会创建预测键**（本地先行里已含 `MySkill` / `Chakra`，键由本次输入创建）。要注意的不是"奥义没键"，而是 **`Server_ChangeChakra(0)` 这条 RPC 不带键**——设计 3.4.2 只允许三个 RPC 带键，且禁止同一次输入发两条带键 RPC。所以本地预扣的 `Chakra` 标记登记在**本次输入的那个键**下，由该键的回执结算清除（Confirmed 清标记、不写回；Rejected 由下一张表写回）。服务器若没扣 Chakra，下一张表按"无标记 → 写回本地"把它拉回权威值。验收里专门加一条"奥义被拒后 Chakra 回到服务器值"。
 - **不进本键的东西**：技能霸体（`AN_ChangeState` 写的 `Armor` / `Unbreakable`）**不挂在技能键下**——归 2.7 的通知拆分（设计 5.9a 的定案，客户端那一半按 2.0.4② 只写标记、不建键）。本地霸体被表覆盖一次、再由服务器自己的通知恢复，是已知代价（约一帧）——注意这条**接入后才成立**（见 2.0.4①），验收时不要当成本切片的失败。
 
+**已落地（2026-10-11）**——C++ 三处（输入点、通知入口、逐片开关），蓝图一处（`BP_Character` 的 `I_ChangeState` 客户端分支，由开发者执行）。**设计 3.7 冻结表零改动**；`Server_ChangeSkillState` 与 `FPredictionKey` 均未动（键参数与回执 2.6 已提前落好，见已定事项 37）。
+
+**一条口径订正（先看）**：设计 5.9a 定案里"**不写预测标记**、不随技能键回滚"半句，与 2.4.1 / 2.4.2 / 已定事项 22 / 协同笔记 §3.16 的"**只写标记、不建键**"冲突——§3.16 那一轮（2026-10-08）的连带订正只改了 5.9a 的 `Adamantine` 一句，漏了这半句。按 2.4.1 的终裁订正为**写标记**（已定事项 44）。**两句话在实现上并不冲突**：`MarkReplicatedAttribute` 只接受未结算的键（已定事项 11），而本通知跑在技能动画的 100-300ms 处、技能键半个 RTT 就被回执结算了——**写标记在常态下写不进去，它天然挂不到技能键上**，"不进本键"照旧成立；标记只在键还活着的那一段（丢回执 / 高延迟）生效，那时本地霸体被标记保住、随该键一起结算。
+
+**C++ 变更表**（行号为改后行号）：
+
+| 文件 | 位置 | 改动 | 性质 |
+| --- | --- | --- | --- |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:383-434`（`AC_Character::FirstSkill`） | 输入点建键（`IsLocallyControlled()` 函数开头已判 + `CanPredict()` + `Prediction.Enabled` + `Prediction.Skill` 四条全过才建，建不出来就是降级路径）→ 本地先行 `PS->MySkill = 1` + 标记 `Self.PS.MySkill` → `BindStateLifecycle(PK, "Self.PS.MySkill", 0)` → 本地写 `LastFirstSkillTime` + 标记 `Self.Char.LastFirstSkillTime` → `RecordPresentation("SkillAnim", 空, 空)` → `Server_ChangeSkillState(1, GetActivePredictionKey())`。降级路径只发空键 RPC、本地只照旧记 `LastFirstSkillTime`，与接入前逐位一致 | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:263-290`（新增 `AC_Character::PredictChangeState`） | `AN_ChangeState` 的客户端那一半入口：`IsLocallyControlled()` + 上下文 + 两个开关 → 本地写 `PS->CharacterState` → **有活跃键才**写标记 `Self.PS.CharacterState`。不建键、不绑生命周期（已定事项 22 / 44） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:254-256`（`AC_Character::ChangeState` 注释） | "客户端那一半在 2.7 接上"更正为"在 3.1 接上、走 `PredictChangeState`"。**函数体未动**，仍是权威写者 | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.h` | `:192-198` | 新增声明 `UFUNCTION(BlueprintCallable) void PredictChangeState(ECharacterStateType target);` | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_PredictionComponent.h` | `:26-29` | 新增逐片开关声明 `extern TAutoConsoleVariable<int32> CVarPredictionSkill;` | 阶段一新建文件上的扩展 |
+| `Naruto/Source/Naruto/C_PredictionComponent.cpp` | `:35-44` | `Prediction.Skill` 的定义（默认 1，长期保留、不进 Shipping 门，读取走 `GetValueOnGameThread()`） | 阶段一新建文件上的扩展 |
+
+**本地先行只到这三项**：`Self.PS.MySkill`、`Self.Char.LastFirstSkillTime`、表现记录。**不含 `Self.PS.CharacterState`**（技能输入不写它——写它的只有 `AN_ChangeState`，走上面那条通知入口）、**不含 `Self.PS.Chakra`**（技能一不消耗查克拉；奥义那一条见下）、**不含位置**（技能位移留到 3.4）。
+
+**蓝图改动表**（一处，`BP_Character` 的接口实现，由开发者执行）：
+
+| 蓝图 | 位置 | 改动 | 为什么 |
+| --- | --- | --- | --- |
+| `BP_Character` | `I_ChangeState` | Authority 分支（调 `ChangeState`）**不动**；**新增 Remote 分支**：调 `PredictChangeState`，入参 `State` 透传 | 时机类的客户端那一半，2.7 判定表把它的落点记在 3.1（未在 2.7 一并改）。不走 `ChangeState`：那一条是权威写者，本地值只留一个写者 —— 与 2.7 的 `I_StartPreInput` 同一形状（Authority / Remote 两分支） |
+
+**验收（按 3.0 固定动作 5）**：
+
+1. **正常**：技能一按下 → 本地立刻出招（不再等服务器把 `MySkill` 复制回来）；`Prediction.Log 1` 下看得到建键、两条标记、冻结与回执结算，`Prediction.Draw` 的 `markers:` 行在回执后清空；
+2. **`Prediction.ForceReject 1`**：本地先行出招后弹回，`MySkill` 回权威值，**标记无残留**（`markers: (none)`）；
+3. **`Prediction.DropResolve 1`**：服务器不回执，2.0s 后超时回滚（日志里那行超时是观察点）；
+4. **`Prediction.Skill 0`**：与接入前逐位一致（无键、无标记、无本地先行，客户端一个字都不写）；
+5. 上面 1–3 叠一轮 `Net PktLag=100` 重跑。**霸体那一帧被表覆盖**（5.9a 的已知代价）在 `PktLag=100` 下可见，不算本切片失败。
+
+**验收通过（2026-10-11，开发者实机）**——蓝图那一处（`BP_Character` 的 `I_ChangeState` Remote 分支）由开发者执行完成，上面 1–5 全部通过，无残留标记、无卡输入。**实机附带一处观察**：第 3 条那档（丢回执）的回滚等待在观感上偏长——即 `PredictionTimeout` 的 2.0s（`C_PredictionComponent.h:332`，设计 2.10.1 / 3.4.5 的兜底值），开发者裁决**不改**（已定事项 47）。蓝图侧那一行已回填 `BlueprintSideCallSiteInventory.md`。
+
+**横向铺开已落地（2026-10-11）**——技能一验收通过后，按本节"范围"条把技能二 / 奥义 / 秘卷 / 通灵四个输入点按同一形状接入（`Prediction.Skill` 开关沿用，不另建，见已定事项 46）。编译通过（`NarutoEditor Win64 Development`，0 警告 0 错误）。
+
+**蓝图侧零改动**：四个输入函数都由 `SetupPlayerInputComponent` 的 EnhancedInput 绑定直接调用（`C_Character.cpp:902-909`），不经过 `BPI_Character`／`BP_Character`，所以这一轮没有蓝图改动表。表现侧照旧：技能二 / 奥义各自的 `BP_*Effect` 已在蓝图实现，秘卷 / 通灵的生成物本来就由服务器生成、随复制到达。
+
+**C++ 变更表**（行号为改后行号；均为现有文件 `Naruto/Source/Naruto/C_Character.cpp`）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `:436-476`（`SecondSkill`，新增块 `:448-473`） | 建键（四条判据同技能一）→ 本地先行 `PS->MySkill = 2` + 标记 `Self.PS.MySkill` + 冻结 → `LastSecondSkillTime` 本地记 + 标记 `Self.Char.LastSecondSkillTime` → 表现记录 → 带键 `Server_ChangeSkillState(2, PK)`。降级路径只发空键 RPC |
+| `:478-518`（`FinalSkill`，新增块 `:488-514`） | 同上形状，`MySkill = 5`；**多一条查克拉预扣**：`PS->Chakra = 0` + 标记 `Self.PS.Chakra`（挂本次输入的键，因为紧随其后的 `Server_ChangeChakra(0)` 按设计 3.4.2 不带键）；**不记时间戳**（奥义消耗查克拉、无 CD，与 `Server_ChangeSkillState_Implementation` 一致）。两条 RPC 的**顺序未动**（技能请求在前，见 2.3 的注释） |
+| `:520-559`（`Scroll`，新增块 `:532-557`） | `MySkill = 4` + 标记 + 冻结；`LastScrollTime` 本地记 + 标记；`Server_SetSummonIndex(0)` 照旧不带键、不进键判据 |
+| `:561-600`（`Summon`，新增块 `:573-598`） | 同上，`LastSummonTime` + `Server_SetSummonIndex(1)`；与秘卷同值 4、同动画、同一个键判据（设计 2.4.4） |
+
+**阶段一新建文件上的扩展**（一行，注释同步）：`C_PredictionComponent.cpp:35-44` 的开关注释由"覆盖两个接入点（输入点 + 通知半边）"更新为"五个技能输入点（`FirstSkill` / `SecondSkill` / `FinalSkill` / `Scroll` / `Summon`）+ 通知半边"，`.h:29` 行尾注释同步（"五条输入 + 通知半边"）。**开关名、默认值、CVar 定义与读取方式一字未动**，`Prediction.Skill 0` 的语义照旧。
+
+**奥义那一条的结算语义**（本节"奥义"条的落地确认）：预扣的 `Chakra` 标记挂在**本次输入的那个键**下 —— Confirmed 只清标记（服务器也扣了，本地留 0，两侧一致）；Rejected / 超时按设计 2.7.2 **从权威值表写回**（表里仍是 4：服务器那条 `bFinalSkillCost` 判据还要求 `PS->MySkill == 5`，技能请求被拒时它不成立，所以服务器没扣），本地随之回到 4。回执丢失那一档由 2.0s 超时兜底，结果与 Rejected 相同。
+
+**验收（按 3.0 固定动作 5，与技能一同表）**：四个输入各跑一遍 正常 / `ForceReject 1` / `DropResolve 1` / `Prediction.Skill 0`，再叠一轮 `Net PktLag=100`。两条额外的观察点：**奥义被拒后查克拉必须回到 4**（本地预扣不残留），**奥义确认后本地 0 与服务器一致**（不出现"本地扣了、服务器没扣"的静默偏离）。秘卷与通灵**都要跑**——同值 4、同动画、同键判据，但服务器侧的 CD 判据（`SummonCDState` / `ScrollCDState`）与生成物都不同。
+
+**验收通过（2026-10-11，开发者实机）**：四个输入按上面的清单跑完，全部通过，含奥义那两条观察点。**切片 3.1 至此整体收口**（技能一 + 横向铺开四个输入 + `AN_ChangeState` 通知半边）。
+
 ### 3.2 切片 Escape（替身）
 
 - **前置：本片的第一步就是在客户端确认落点计算所需量齐备**（设计 5.4 的本地判定 + 本地瞬移：`LastEscapeTime` 在表里、落点用本机 `PlaceMark` 计算）。若某个量最终不可得，本切片**降级为不预测瞬移**，只保留服务器权威路径，不要为预测临时新增数据通道（设计 5.4 注）。
@@ -632,13 +686,62 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 - **本地先行**：`MySkill`、`Chakra`、`LastEscapeTime`、位置（`RecordMoveBaseline()` + `SetActorLocation`）、表现。
 - **验收**：三连之外，重点看**位置回滚**——强制拒绝时位置必须回到基线，且用 `TeleportPhysics` 不被地形卡住（设计 3.4.5 末条）。
 
+#### 3.2 前置核验（2026-10-11）——落点所需量在客户端齐全，本片不降级
+
+| 量 | 客户端来源 | 结论 |
+| --- | --- | --- |
+| 自身位置 | 本机 | ✓ |
+| 对手位置 | `OtherPS->GetPawn()` | ✓ 引擎侧已核：`APawn::OnRep_PlayerState()` → `APawn::SetPlayerState()` → `FSetPlayerStatePawn(PlayerState, this)`（`Pawn.cpp:612-630`、`PlayerState.h:445-457`），Pawn 与 PlayerState 的互指在客户端同样建立，故 `GetPawn()` 返回敌方角色 |
+| `EscapeRange` | 类默认值（`C_Character.h:267`） | ✓ 双端同值 |
+| `CharacterState` / `Chakra` / `LastEscapeTime` | 权威值表（2.4 起） | ✓ |
+| `EscapeCDState` | 客户端 Tick 从表内 `LastEscapeTime` 推（`C_Character.cpp:923-927`，该段无权限判定） | ✓ |
+
+落点用的 `PlaceMark` 不参与计算（它是纯表现组件），**本片不需要为预测新增任何数据通道**，也不降级。
+
+**已知代价（设计 2.9 已接受）**：对手位置在客户端是模拟代理、带约半个 RTT 的延迟，所以本机算出的落点可能与服务器的略有不同（两人都在动时最明显）。自身位置的一致性由移动校正通道（`ServerMove` → `ClientAdjustPosition`）兜底，本片不为它加通道。
+
+#### 3.2 一条口径订正（先看）
+
+设计 3.6.2 替身示例里"状态预测：`Self.PS.MySkill` = 替身（本地置位 + 标记）"一行，以及 3.3.2 类型表 `Escape` 行的"对应 `MySkill`、`Chakra`、`LastEscapeTime`、位置瞬移"，与本项目的服务器路径不符：`Server_Escape_Implementation` 从头到尾**不写 `MySkill`**（全仓 grep：写 `MySkill` 的只有技能 1 / 2 / 4 / 5 与 `ChangeAttack` / `PlayerStateReset`），且 `MySkill` 值域里没有"替身"这一取值。照流程写的话本地那个值永远等不到权威值变化，2.7.2 的"值不等"那一行会一直保住它（本机卡在替身态直到超时）。按实现订正为**不预测 `MySkill`**（已定事项 48）：本片只预测服务器真正写的那三项 —— `Self.PS.CharacterState`、`Self.PS.Chakra`、`Self.Char.LastEscapeTime` —— 加位置。替身的动画表现由 `CharacterState = Protected` 驱动，不依赖 `MySkill`。
+
+#### 3.2 已落地（2026-10-11）
+
+编译通过（`NarutoEditor Win64 Development`，0 警告 0 错误）。**设计 3.7 冻结表零改动**：`Server_Escape` 的键参数是设计 3.7 明列的三个可带键 RPC 之一，落点计算抽函数是文件内重构、不入冻结表。
+
+**C++ 变更表**（行号为改后行号）：
+
+| 文件 | 位置 | 改动 | 性质 |
+| --- | --- | --- | --- |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:376-433`（`AC_Character::Escape`，新增块 `:381-432`） | 输入点：门 = `IsLocallyControlled()` + `CanPredict()` + `Prediction.Enabled` + `Prediction.Escape` + 与服务器同源的三条判据（`Chakra != 0` / `EscapeCDState == 0` / `CharacterState ∈ {Staggered, Launched}`），全过才建键。本地先行：`LastEscapeTime` + 标记 + `BindStateLifecycle(PK, "Self.PS.CharacterState", Normal)` → `CharacterState = Protected` + 标记 → `Chakra - 1` + 标记 → `RecordMoveBaseline()` + `StopMovementImmediately()` + `SetActorLocation(ComputeEscapeTargetPlace())` → `RecordPresentation("EscapeAnim", 空, 空)` → `Server_Escape(PK)`。降级路径与接入前逐位一致（不建键、不写任何本地值、只发空键 RPC——接入前那个函数体本来就是"只发一条不带参的 `Server_Escape`"） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:654-680`（新增 `AC_Character::ComputeEscapeTargetPlace`） | 落点计算从 `Server_Escape_Implementation` 抽出，服务器与拥有者客户端**共用同一个函数**（设计 2.4.4 判据同源）。逐行对应原循环，只多两处判空（设计 5.8：原实现对 `Cast` 结果与 `GetPawn()` 都没判空，前者遇非 `AC_PlayerState` 直接崩、后者在对手无 Pawn 时崩） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:682-732`（`Server_Escape_Implementation`） | 加 `FPredictionKey` 参数 + 回执：三条判据由嵌套 `if` 改为早退（语义等价，原实现在不满足时就是什么都不做），每个出口 `SendPredictionResolve(…, 1)`、被接受路径末尾 `(…, 0)`；`ForceReject` 分支照 2.6 形状（只作用于带键请求）；新增 `Controller` 判空（原实现在扣查克拉那一行直接解引用 `Cast<AC_PlayerController>(Controller)`）；瞬移改调 `ComputeEscapeTargetPlace()`。**权威侧的写值与顺序一字未动**（时间戳 / 保护时间 / `Server_ChangeBox` / `CharacterState` / `StopMovementImmediately` / 瞬移 / 扣查克拉） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.h` | `:340-348` | `Server_Escape` 加键参数（按值传，同 `Server_ChangeSkillState` 的约定）；新增 `ComputeEscapeTargetPlace() const` 声明 | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_PredictionComponent.h` | `:30` | 新增逐片开关声明 `extern TAutoConsoleVariable<int32> CVarPredictionEscape;` | 阶段一新建文件上的扩展 |
+| `Naruto/Source/Naruto/C_PredictionComponent.cpp` | `:46-53` | `Prediction.Escape` 的定义（默认 1，长期保留、不进 Shipping 门，读取走 `GetValueOnGameThread()`） | 阶段一新建文件上的扩展 |
+
+**本地先行只到这三项属性 + 位置 + 表现记录**：`Self.Char.LastEscapeTime`、`Self.PS.CharacterState`、`Self.PS.Chakra`、`SetActorLocation(落点)`、`RecordPresentation("EscapeAnim")`。**不含 `Self.PS.MySkill`**（见上面那条口径订正）；**不含 `ProtectedStartTime` / `ProtectedTime`**（它们在服务器 Tick 里只被 `HasAuthority()` 分支读写，是纯服务器变量，客户端预测没有意义）；**不含 `Server_ChangeBox`**（服务器在替身路径里自己调，碰撞框本地先行归 3.5）。
+
+**冻结绑定的取舍**：`BindStateLifecycle(PK, "Self.PS.CharacterState", Normal)` 是本片唯一新用到的 `StateName`（设计 3.4.2 列了它，此前无人使用）。它的作用只是**回执丢失时的兜底冻结**——保护态结束时（服务器 Tick 写回 `Normal`，1.5s 保护窗之后）把键冻结、腾出活跃键位，免得下一次输入因为 `CreatePredictionKey` 撞上活跃键而降级。正常路径由回执结算，冻结与否都不改变标记的清除时机（Confirmed 一律清标记）。
+
+**蓝图侧零改动**：`Escape` 由 `SetupPlayerInputComponent` 的 EnhancedInput 绑定直接调用（`C_Character.cpp:1000`），不经过 `BPI_Character`／`BP_Character`；`BlueprintSideCallSiteInventory.md` 里也没有替身相关的调用点。表现侧照旧：替身动画由 `CharacterState` 驱动、保护态动画由 `Mult_ChangeProtectedAnim` 多播，都不需要蓝图新增分支。
+
+**验收（按 3.0 固定动作 5）**：
+
+1. **正常**：被击飞 / 硬直中按替身 → 本机立刻瞬移到对手身边（不再等服务器），查克拉立刻少一格、新 CD 立刻起跳；`Prediction.Log 1` 下看得到建键、三条标记、一次基线捕获、回执结算，`Prediction.Draw` 的 `markers:` 行在回执后清空；
+2. **`Prediction.ForceReject 1`**（本片的重点）：本地先行的瞬移之后**弹回基线**（`SetActorLocation(基线, TeleportPhysics)`），查克拉 / `CharacterState` / `LastEscapeTime` 全部回权威值，标记无残留；贴着墙 / 站在斜坡上再跑一遍，确认回位不被地形卡住（设计 3.4.5 末条）；
+3. **`Prediction.DropResolve 1`**：服务器不回执，2.0s 后超时回滚 —— 观感是"瞬移出去、2.0s 后被拉回基线"，这是兜底路径的预期表现（与已定事项 47 的裁决一致）；
+4. **`Prediction.Escape 0`**：与接入前逐位一致（无键、无标记、无本地瞬移，客户端一个字都不写）；
+5. 上面 1–3 叠一轮 `Net PktLag=100` 重跑。**落点可能略有出入**（对手位置在客户端带延迟，见前置核验的已知代价）不算失败；**自身位置跳变**若出现，看移动校正通道是否在几帧内收敛。
+
+**验收通过（2026-10-11，开发者实机）**：上面 1–5 全部通过——含 `ForceReject` 档的弹回基线（贴墙 / 斜坡两处回位都没被地形卡住）与标记清空，`DropResolve` 档的"瞬移出去、2.0s 后被拉回基线"按预期表现，"蓝图侧零改动"这一条也得到确认。**切片 3.2 至此整体收口**（3.1 与 3.2 是阶段三前两个切片，位置预测的基线机制自此打通）。
+
 ### 3.3 切片 Attack（普攻段）——最复杂，放在最后
 
 - **前置**：2.5 锁通道（闸门 1 的实际依据，以及拒绝路径的补发）。
 - **内容**：
   - 输入点加两道与服务器同源的闸门（`bAttackInputLock == false`；`CharacterState ∈ {Normal, Protected}`，对标 `C_Character.cpp:416-417`），通过后：本地写段号 → 置锁 → 建键 → `Server_Attack(PK)`；
-  - **段号写入点从动画推进点前移到输入点**（设计 2.4.4 的核心改动）；
-  - `AN_ChangeAttack` 改为**只切表现**：按本地 `PS->Attack` 驱动动画，**删掉蓝图里现有的段号写入**（否则输入点写一次、推进点又写一次）；
+  - **段号写入点从动画推进点前移到输入点**（设计 2.4.4 的核心改动）——**这一条已被实机返工推翻**（见下面的"3.3 实机返工"节）：落地形态是"输入点只在**开新段**那一支 +1，**续段**的段号仍在推进点（`AN_ChangeAttack` → `ChangeAttack`）写"，与接入前逐位一致；
+  - `AN_ChangeAttack` 改为**只切表现**：按本地 `PS->Attack` 驱动动画，**删掉蓝图里现有的段号写入**（否则输入点写一次、推进点又写一次）——两处一并订正：2.0.4① 已确认蓝图里**本来就没有**客户端那一半的段号写入（客户端那一半是新加的），返工后推进点的**服务器侧**段号写入（`ChangeAttack`）也恢复；
   - `AN_ChangeAttack` 的 `attack == 0`（收招）分支按端区分：服务器写 0；拥有者客户端写 0 **并置预测标记**（与输入点写段号同构）；其它端不写、等表；
   - `BindStateLifecycle(PK, "Self.PS.Attack", 0)` 作兜底（只覆盖收招、被打断这类没有下一次预测的结束路径）；
   - "被拒绝的一段"按设计 2.4.4 的既定代价处理，不额外加机制。
@@ -648,6 +751,155 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
   - `Prediction.ForceReject 1` 下："多挥一下随即弹回"，`Attack` 回到权威值，**且本地锁被补发的更正解除——拒绝之后必须能立刻再按**（这是 2.6.1 的唯一验收点，也是本切片最容易挂的地方）；
   - 丢回执：2.0s 回滚，锁同样被下一次写锁 / 补发解除；
   - 收招：本地写 0 后不被"服务器还停在最后一段"的表拽回连段（采用规则第三行覆盖，设计 2.4.4）。
+
+#### 3.3 一条口径订正（先看）
+
+设计 2.4.4 的输入点伪码写着"闸门 1：本地 `bAttackInputLock == false`——镜像服务器 `Server_Attack` 里的同一判据（`C_Character.cpp:417`）"，并要求"不通过：不建键、不发 RPC"。按实现逐行核下来，那句注释把服务器那个分支读成了"接受判据"，而它不是（已定事项 49）：
+
+1. `Server_Attack_Implementation` 里 `if (bAttackInputLock == false)`（改后 `C_Character.cpp:871-875`）只决定"这次输入**开新段**"（结算转向 + 置锁 + 段号 +1）；锁为真时函数照样在开头无条件写 `bPreInputLock = true`（改后 `:850`）——那正是**预输入登记**，推进点的 `ChangeAttack` 靠它决定是否连段变换（改后 `:236-243`）。**连段的每一次"续段"输入都发生在锁为真的时刻**：照设计原文把闸门 1 当掉线闸门（不通过就不建键、不发 RPC），连段永远只到第一段，而且客户端那份 `bPreInputLock` 再也不会被置真（客户端唯一写它的地方就是这里）。
+2. 因此闸门 1 按"**服务器会不会让这次输入算一段**"实现：`bAttackInputLock == false`（开新段）**或** `bPreInputLock == false`（落在已打开的预输入窗口内，会被推进点消费成连段）。两个都不满足 = 服务器会把这次输入吞掉（窗口外的抢拍、或同一个窗口里的第二次按键）→ 本地不建键、不写任何值。
+3. **段号的写入点最后没有前移**（实机返工后的最终结论，取代本节初稿的"连带改动"）：设计 2.4.4 说"服务器写的是「已请求的段数」（每次输入 +1，`C_Character.cpp:421`）"——实际只有**开新段**那一支 +1，**续段**那一段的数值由**推进点的动画通知**写（`ChangeAttack` 的 `bPreInputLock` 支：`PS->Attack = attack`）。初稿把这次 +1 扩到覆盖窗口那一支（让"输入点即段号"成立），实机验证证明那条路错了——**动画状态机按 `PS->Attack` 切段，段号在按键瞬间变就等于连段在按键瞬间切段**，而正确的切段点是 `AN_ChangeAttack`（见下面的返工节）。最终形态：**服务器那次 +1 留在"锁为假"支不动，续段的段号由推进点写**——本片对段号语义的改动只剩"客户端也在推进点写一份（`PredictChangeAttack`），与服务器同源"，服务器侧与接入前逐位一致。
+4. **闸门不通过时的处理按 3.1／3.2 的降级约定**（不建键、不写本地值、照发 RPC，只是传**空键**），而不是设计注里那句"不发 RPC"：两道闸门读的都是本地值，本地可能比服务器旧一点点（预输入窗口在两端各由各自的动画推进，见下面的已知代价），这时**让服务器裁决**才等于"与接入前逐位一致"。服务器对这次请求的判定只有两种：算得上一段 → `Confirmed`；状态闸门不过或算不上一段 → `Rejected`（后者就是设计 2.4.4 的"被拒绝的一段"）。开关关掉时更是必须照发——`Prediction.Attack 0` 的定义就是"本片完全不接入"。
+
+#### 3.3 已落地（2026-10-11）
+
+编译通过（`NarutoEditor Win64 Development`，0 警告 0 错误）。**设计 3.7 冻结表零改动**：`Server_Attack` 的键参数是设计 3.7 明列的三个可带键 RPC 之一，段号写入点前移是既有函数内部的改动、不入冻结表。
+
+**C++ 变更表**（行号为改后行号）：
+
+| 文件 | 位置 | 改动 | 性质 |
+| --- | --- | --- | --- |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:418-487`（`AC_Character::Attack`，新增块 `:422-486`） | 输入点：门 = `IsLocallyControlled()` + **`!HasAuthority()`**（返工补的端别闸门）+ `CanPredict()` + `Prediction.Enabled` + `Prediction.Attack` + 与服务器同源的两道闸门（状态 ∈ {Normal, Protected}；`bAttackInputLock == false` 或 `bPreInputLock == false`）。全过才：冻结旧键 → 建键 → **本地先行分两半**（见下面"输入点的两半"）→ 带键 `Server_Attack(PK)`。降级路径与接入前逐位一致（不建键、不写任何本地值、只发空键 RPC——接入前那个函数体本来就是"只发一条不带参的 `Server_Attack`"） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:296-337`（新增 `AC_Character::PredictChangeAttack`；第二次返工后为 `:296-352`） | `AN_ChangeAttack` 的客户端那一半：**推进（`attack != 0`）= 连段的状态变换本身** —— `bPreInputLock` 为真才写 `PS->Attack = attack`（预输入为假不写，服务器那一支开锁）；收招（`attack == 0`）本地写 `PS->Attack = 0`；两次写之后**有活跃键才写标记**。门 = `IsLocallyControlled()` + **`HasAuthority()` 早退**（返工补的端别闸门）+ 本片开关。形状照 `PredictChangeState`：不建键、不绑生命周期。**第二次返工补：与 `ChangeAttack` 同源的两处 `bAttackInputLock = false` 本地写** | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:864-932`（`Server_Attack_Implementation`） | 加 `FPredictionKey` 参数 + 回执四个出口（`Rejected` ×3 / `Confirmed` ×1；`ForceReject` 分支照 2.6 形状、只作用于带键请求）；窗口状态在置真**之前**采样（`bPreInputWindowOpen` `:891` / `bThisInputCounts` `:892`，只作回执判据）；**段号 +1 与 `MyAttack` 写在"锁为假"那一支内（`:916-922`），与接入前同一支**（返工恢复；被吞掉的输入一个字段都不写，只回 `Rejected`） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:223-253`（`ChangeAttack`） | 推进支（`else if (bPreInputLock)`）**保留段号写入** `PS->Attack = attack` / `MyAttack = attack`（`:244-245`，返工恢复——这里才是连段的状态变换点），转向两行与两个收招／结束分支、末尾那次 `SendLockCorrection` 一字未动 | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.cpp` | 端别闸门六处：`:435-436`（`Attack`）、`:503-504`（`Escape`）、`:570` / `:624` / `:665` / `:713` / `:756`（技能一 / 二 / 奥义 / 秘卷 / 通灵） | 每处补一行 `&& !HasAuthority()`（技能五处形状是 `if (!HasAuthority()` 起头 + 原条件整体缩进）——**返工补的**，理由见已定事项 50 | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.h` | `:200-206` | 新增 `UFUNCTION(BlueprintCallable) void PredictChangeAttack(int32 attack);`（客户端那一半的入口，蓝图 Remote 分支调它） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_Character.h` | `:345-348` | `Server_Attack` 加键参数（按值传，同 `Server_Escape` 的约定，UHT 生成的代码需要） | 现有文件（原项目） |
+| `Naruto/Source/Naruto/C_PredictionComponent.h` | `:31` | 新增逐片开关声明 `extern TAutoConsoleVariable<int32> CVarPredictionAttack;` | 阶段一新建文件上的扩展 |
+| `Naruto/Source/Naruto/C_PredictionComponent.cpp` | `:54-61` | `Prediction.Attack` 的定义（默认 1，长期保留、不进 Shipping 门，读取走 `GetValueOnGameThread()`） | 阶段一新建文件上的扩展 |
+
+**本地先行只有三样**：段号 `Self.PS.Attack`、两把锁（`bAttackInputLock` / `bPreInputLock`，不建快照、不随段键回滚；**解除走两条通道**：服务器写锁时的 `Client_CorrectLocks` 补发，以及同类通知客户端半边的本地写 —— 见第二次实机返工与已定事项 51）、一条表现记录。段号有**两个写入点**，各自与服务器的同一个位置同源（返工后的形态）：**开新段**在输入点（`Attack` ↔ `Server_Attack_Implementation` 的"锁为假"支）、**续段**在推进点（`PredictChangeAttack` ↔ `ChangeAttack` 的 `bPreInputLock` 支）。
+
+**输入点的两半**（返工后的落地形态）：判据是同一个锁；`bPreInputLock` 两半都写（理由见下），**段号只有第一半写**：
+
+| 半 | 判据 | 本地写什么 | 对应的服务器支 |
+| --- | --- | --- | --- |
+| **开新段** | `bAttackInputLock == false` | 段号 +1 + 标记 `Self.PS.Attack` + `BindStateLifecycle(PK, "Self.PS.Attack", 0)` + `bAttackInputLock = true` + `RecordPresentation("AttackAnim", 空, 空)` | `Server_Attack_Implementation` 的"锁为假"支（转向 + 置锁 + 段号 +1，`:916-922`） |
+| **登记预输入** | 锁为真、`bPreInputLock == false` | 只有 `bPreInputLock = true`（段号不写 → 没有标记可写） | 函数开头那次无条件 `bPreInputLock = true`（`:894`，推进点消费它） |
+
+两半都建键、都发带键 RPC：本键的回执说的是"服务器认没认下这次输入"（`bThisInputCounts`），第二半只有那一个锁标志落笔，回执是它唯一拿得到的信号。
+
+**收招只写 `PS->Attack = 0`**：`MySkill` / `MyAttack` / `CharacterState` 都不在客户端写（`MyAttack` 由 `GetInformation()` 每帧从 `PS->Attack` 刷新，`MySkill` 与 `CharacterState` 各有自己的预测入口 / 表通道——本地值只留一个写者）。
+
+**为什么 `bPreInputLock` 也要本地置真**（设计 2.6 的锁表只点了 `bAttackInputLock`）：服务器在**每一条**普攻请求上都无条件把它置真（`:894`），本地跟着置真才守住"一个窗口只算一段"——否则同一个窗口里的第二次按键会被本地算成第二段（本地多出一段、服务器只推进一段，虽然会被表拉回，但白晃一下）。
+
+**蓝图改动表**（本包唯一一处，由开发者执行；验收通过后回填 `BlueprintSideCallSiteInventory.md`）：
+
+| 蓝图 | 事件 | 改动 | 说明 |
+| --- | --- | --- | --- |
+| `BP_Character` | `I_ChangeAttack` | Authority 分支（调 `ChangeAttack(Attack)`）**不动**；**新增 Remote 分支**：调 `PredictChangeAttack`，入参 `Attack` 透传 | 时机类的客户端那一半，2.7 判定表把它排在 3.3（已定事项 40：客户端那一半是随预测新加，不是从现有实现里拆）。远端（模拟代理）也走这条分支没关系——C++ 里自判 `IsLocallyControlled()`，与 `I_ChangeState` 的 `PredictChangeState` 同形 |
+
+**已知代价（两条，按 3.1 的同待遇记录、不额外加机制）**：
+
+1. **预输入窗口在两端各由各自的动画推进**：客户端的窗口来自本机动画，服务器的窗口来自服务器动画（服务器侧动画比拥有者客户端晚约半个 RTT 起跳）。窗口边缘（约半个 RTT 宽）上的按键可能"本地算了一段、服务器算不上一段"（→ `Rejected`，观感是"多挥一下随即弹回"），也可能反过来（→ 本地没算、服务器算了，本地随后按权威值表补上那一段，观感是"这一段晚半个 RTT 出手"）。**这是段粒度方案的固有代价**——设计 2.4.4 已接受："段间存在裁决点，就不存在零感知的预测"。
+2. **推进点两次本地写（收招的 0、续段的段号）的标记都是兜底性的**：它们同样只在"写这一刻还有活跃键"时写得进去（3.4.3 的两个忽略条件），而本段键半个 RTT 就被回执结算了，所以常态是**没有活跃键**（与 3.1 的 `PredictChangeState` 同因）。此时本地那个值只靠"服务器在**同一处**也写同一个值"对齐（收招写 0、续段写同一段号，`ChangeAttack` 两支都写——值相等，采用规则不改写本地）。这半个 RTT 里若刚好来了一张"服务器还停在上一段 / 最后一段"的表（表在服务器任一权威值变化时整份重发），本地会有一帧被拽回，下一次表到达 / 本地下一次推进再对齐。干净连段的测试碰不到；实战中与受击 / 技能输入叠在一起时偶尔可见。**返工后的新增情形**：客户端在推进点预测的那一段若服务器并不认（本机窗口比服务器先开，见代价 1），本地会多出一段——它随后被权威值表拽回（"多挥一下随即弹回"），与 `ForceReject` 档是同一观感。
+
+**验收（按 3.0 固定动作 5；这一份已被下面的返工节取代，保留作历史对照）**：
+
+1. **连段正常**：单段、两段、三段连击各跑一遍——本地按下去立刻出手（不再等服务器），段号随每次输入 +1；`Prediction.Log 1` 下看得到"建键 → 四出口之一"的成对记录，`Prediction.Draw` 的 `markers:` 行在回执后清空。**重点：第二 / 第三段必须能在预输入窗口内按得进去**——这是本片最容易挂的地方，也正是上面那条订正第 1 点的原因；
+2. **`Prediction.ForceReject 1`**：多挥一下随即弹回（`Attack` 回到权威值 = 上一段或 0），标记无残留；**且本地锁被补发的更正解除——拒绝之后必须能立刻再按**（设计 2.6.1 的唯一验收点，2.5 铺好了通道，本片第一次真正用上它）；
+3. **`Prediction.DropResolve 1`**：服务器不回执，2.0s 后超时回滚（日志里那行超时是观察点），锁同样被"下一次写锁 / 补发"解除；
+4. **收招**：本地写 0 后不被"服务器还停在最后一段"的表拽回连段（设计 2.4.4 的收招表）；
+5. **`Prediction.Attack 0`**：与接入前逐位一致（无键、无标记、无本地写值、无本地置锁，客户端一个字都不写）；
+6. 上面 1–3 叠一轮 `Net PktLag=100` 重跑；第 1 条再补一轮交叉输入（技能进行中按普攻、连段中按替身），看回滚只影响本键登记项（计划 3.6 的组合验收前置）。
+
+#### 3.3 实机返工（2026-10-11，开发者实机）
+
+上面"已落地"一节的实现（**段号写入点前移到输入点**）在实机上暴露两条缺陷，开发者报告后当轮返工。**上面那份验收清单作废、以本节清单为准**；**蓝图改动表不变**（仍只需 `I_ChangeAttack` 的 Remote 分支）。
+
+**反馈一：连段在预输入处就直接进入下一段了**（应在 `AN_ChangeAttack` 时才切段）。开发者澄清的连段原理 —— 这是本片口径基准：**输入锁假** → 输入让普攻进入下一段并置锁真；**锁真** → 输入只把预输入置真（登记）。两个通知各管一头：`AN_PreInput` 把预输入置假（在它**之后**按的键才登记得上）；`AN_ChangeAttack` 在**预输入为真时推进连段**（这才是状态变换、也就是切段那一刻）、预输入为假时开锁，并按移动意向转向。
+
+- **根因**：上一版把服务器那次段号 `+1` 从"锁为假"支搬到了覆盖"窗口开着"（`bThisInputCounts`），客户端输入点也跟着在窗口内 `+1`。而动画状态机按 `PS->Attack` 切段 —— 段号在**按键瞬间**变就等于连段在按键瞬间切段（观察到的"提前一段"）。
+- **修法**：服务器 `+1` 回到"锁为假"支（与接入前同一支，`:916-922`）；客户端输入点只有"锁为假"那一半写段号，窗口那一半只写 `bPreInputLock`；**续段的段号由推进点写** —— 服务器 `ChangeAttack` 的 `bPreInputLock` 支（恢复原两行 `:244-245`）、客户端 `PredictChangeAttack` 按同判据写一份（返工前它在推进支"什么都不写"）。
+
+**反馈二：开启普攻预测后，侦听服务器的宿主（host）无法普攻**。
+
+- **根因**：`CanPredict()`（`C_PredictionComponent.cpp:366-371`）只判上下文有效、**不判端别**（设计如此），而宿主的 `IsLocallyControlled()` 与 `HasAuthority()` **同时为真**；宿主的 `Server_Attack` 在同一函数栈上内联执行，看到的是本地刚置真的锁 → `bThisInputCounts == false` → 当场 `Rejected` → 本地段号被回滚、锁卡死。
+- **修法**：六处预测接入点补端别闸门 `!HasAuthority()`（`Attack` / `Escape` / 技能 ×5）。设计 3.2"服务器不先行"原来靠"**服务器侧没有建键调用**"成立，在侦听服务器的宿主上不成立 —— 这是对设计 3.2 前提的一处**补强**，不改设计措辞，记为**已定事项 50**。同一根因顺带修掉**宿主替身连瞬两次**（`Server_Escape` 会按已经瞬移过的位置重算落点、再瞬移一次）。
+
+**返工后的最终形态**：`Attack` 本地先行分两半（见上面"输入点的两半"表）、`PredictChangeAttack` 推进支写段号、`Server_Attack_Implementation` 的 `+1` 回归"锁为假"支（窗口采样保留，只作回执判据）、`ChangeAttack` 推进支恢复段号写入、六处端别闸门。**返工不新增蓝图改动**；但要**先确认 `I_ChangeAttack` 的 Remote 分支已经加上**（上一轮就交给开发者的那一处），否则推进点的本地先行不会发生——观感是"连段不切段"。
+
+**验收（更新版，取代上面那份）**：
+
+1. **连段在 `AN_ChangeAttack` 那一刻切段**：单段 / 两段 / 三段连击 —— 第二 / 第三段在预输入窗口内按下时**不出手**（锁真 → 只登记），到当前段的 `AN_ChangeAttack` 才切段；`Prediction.Log 1` 下两类记录成对可见（输入 → 建键 → 回执；推进 → 段号写）；
+2. **宿主（侦听服务器）能普攻**：host 的普攻与连段正常（段号、锁、表现与客户端一致）；**替身不连瞬两次**（落点按瞬移前的位置算）；
+3. **`Prediction.ForceReject 1`**：多挥一下随即弹回（`Attack` 回权威值），标记无残留，**拒绝后能立刻再按**（本地锁被补发解除）；
+4. **`Prediction.DropResolve 1`**：2.0s 超时回滚；
+5. **收招**：本地写 0 后不被"服务器还停在最后一段"的表拽回连段；
+6. **`Prediction.Attack 0`**：与接入前逐位一致（客户端一个字都不写）；
+7. 上面 1–3 叠一轮 `Net PktLag=100` 重跑；第 1 条再补一轮交叉输入（技能进行中按普攻、连段中按替身）。
+
+**残余代价（返工后新增一条，已并入上面的"已知代价"）**：客户端窗口比服务器先开时，本地窗口前沿（约半个 RTT 宽）的按键会在推进点预测一段而服务器并不认（`Rejected` → 段号被权威值表拽回），观感是"多挥一下随即弹回"；`ForceReject` 档同理。接入前这个位置是**死区**（服务器吞掉输入、客户端毫无反应），预测把它换成一次可见的多余挥击 —— 与设计 2.4.4 的既定取舍同一性质。
+
+#### 3.3 第二次实机返工（2026-10-11，开发者实机）
+
+第一次返工后的实机复验又暴露两条缺陷，共同根因是**本地锁 `bAttackInputLock` 的解除此前只靠更正通道**。**上面那份"验收（更新版）"清单作废、以本节清单为准**；**蓝图改动表仍不变**（`I_ChangeAttack` 的 Remote 分支）。
+
+**反馈一（低延迟）**：`Net PktLag=0` 下客户端高频输入时，**服务器进入了连段动画、客户端不出现**。
+**反馈二（高延迟）**：延迟越高越容易出现 —— **客户端在动画预输入（`AN_PreInput`）之前按下的输入也会让客户端进入下一连段**。
+
+- **共同根因**：`bPreInputLock` 在客户端是新鲜的（输入点自己置真、自己那条 `AN_PreInput` 置假，与服务器是同一批通知、只差一个 δ 错位），而 `bAttackInputLock` 在客户端此前**只在服务器写锁时由 `Client_CorrectLocks` 补发**（发送时刻的快照，到达再晚 RTT/2）。两条通道都在、也不缺，缺的是**送达时刻** —— 而 `Attack()` 的闸门 1 读的正是本地这份锁。于是有一段时间两端判据不一致：
+
+  | 窗口 | 客户端本地锁 | 服务器当时 | 后果 |
+  | --- | --- | --- | --- |
+  | 反馈一（窄：`PktLag=0` 时只有亚帧级，要高频输入才撞得上） | 真（还没收到开锁更正） | 假 | 按键被本地判成"登记预输入"（不写段号），服务器判成"开新段"（+1 并立刻推进到下一段）→ **服务器进了下一段、客户端停在原地**。而客户端此时多半已回到 `Idle`（**`Idle` 没有 `AN_ChangeAttack`**，`PredictChangeAttack` 永不执行），只能等权威值表把段号写回来，**"跳到第 N 段"的跳变触发不了动画状态机** → 客户端整段连段不出现 |
+  | 反馈二（≈一个 RTT 宽，越延迟越明显） | 假（本地已开锁） | 真（服务器仍在连段） | 窗口前的按键被本地判成"开新段"（本地 `PS->Attack + 1`、客户端自己切到下一段），服务器把它吞掉（`Rejected`）→ 回执把本地值拽回 = "在预输入前按的输入也进了下一连段" |
+
+- **修法（与 `bPreInputLock` 同构：同源通知的客户端半边各写一份）**：`AN_ChangeAttack` 与 `AN_PreInput` 一样是**两端各自都有的通知**，服务器在它的 `ChangeAttack` 里写的那两处 `bAttackInputLock = false`，客户端就在自己这条同源通知上写同一份 —— `AC_Character::PredictChangeAttack` 的两支各补一次本地开锁（收招支 `:330`、"窗口没被消费"支 `:336`）。修完后两端锁的变化点都是"事件端本地落、对方 δ 后落"，本地先行退化为"δ 提前"，与服务器按 δ 校正后的判定互相抵消，判据恢复同源（= 与接入前逐位一致的取值流）。**`Attack()` 的闸门与 `bPreInputLock` 的本地先行不用改**（`p` 本来就新鲜）。
+- **不需要新增蓝图改动**，但**依赖** `I_ChangeAttack` 的 Remote 分支确实存在（第一次返工就交给开发者的那一处；`BP_Character.uasset` 的 mtime 2026-10-11 16:36、资产内已含 `PredictChangeAttack`）。
+- **裁决**：记为**已定事项 51**（锁的本地写点表），并订正前面"本地先行只有三样"与 `Attack()` 头注释里"锁只由 `Client_CorrectLocks` 解除"的说法。
+
+**第二次返工的 C++ 变更（行号为第二次返工后的行号；文件总行数 1179 → 1197，上面"已落地"表的行号是第一次返工后的，`Attack` 及其之后的位置统一 **+18**）**：
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:296-352`（`PredictChangeAttack`，原 `:296-337`） | 两支各补一次 `bAttackInputLock = false`（收招支 `:330`、"窗口没被消费"支 `:336`，后者改成带大括号的早退块）；函数头注释改为"推进点做三件事"（含锁）；标记说明那句"两次本地写"改为"两处段号本地写"（`:342`） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `Attack` 开新段支的置锁注释（`:487-489`） | "只由服务器补发的 Client_CorrectLocks 解除" → 解除有两条：更正补发 + 本地推进点 `PredictChangeAttack` 在同一条动画通知上的同名写入 |
+| `Naruto/Source/Naruto/C_Character.cpp` | `Attack` 窗口支的尾注释（`:498-499`） | 同上（"靠服务器补发的更正解除" → 两条） |
+
+**验收（第二次返工版，取代以上所有）**：
+
+1. **高延迟下不在预输入前抢段**（反馈二）：`Net PktLag=150` 起、逐渐加大到 300 —— 在 `AN_PreInput` 之前连按普攻，**客户端不得先于服务器进入下一段**（不得出现"多挥一下随即弹回"）；`Prediction.Log 1` 下不要出现成对的"本地 +1 → `Rejected` → 回滚"；
+2. **低延迟高频输入两端同步**（反馈一）：`Net PktLag=0`、接近帧率上限的连点 —— 服务器进连段时**客户端必须同时切段**（不得出现服务器在挥、客户端站住不动）；`Prediction.Log 1` 下客户端每次 `AN_ChangeAttack` 的推进记录与服务器的 `ChangeAttack` 记录成对；
+3. 上面"更新版"清单的 1–7 条照跑（切段点、宿主、`ForceReject`、`DropResolve`、收招、`Prediction.Attack 0`、交叉输入）；
+4. 专项观察两端的锁：`Prediction.Log 1` 下 `SendLockCorrection` / `Client_CorrectLocks` 两条 Verbose 日志里，`bAttackInputLock` 的**本地写**（`Attack` 开新段支、`PredictChangeAttack` 两支）应当与更正补发**不冲突**（同一个值、重复下发是无害的覆盖）。
+
+#### 3.3 第二次返工的收尾修订（2026-10-11，反馈二复发）
+
+上面的修法落地后**反馈二依旧存在**（开发者复验："问题2依旧存在，你需要检测一下 `bPreInputLock` 的链路"）。按这条线索把 `bPreInputLock` 的每个写入点查了一遍，**根因在更正通道**：
+
+- 三个锁**都不是复制属性**（`GetLifetimeReplicatedProps` 为空，已确认），服务器那份 `bPreInputLock` 唯一的下发路径就是 `Client_CorrectLocks` 的 **bit1**；
+- 而 `Server_Attack_Implementation` 在 `:912` 无条件把 `bPreInputLock` 置真，三个出口（含两条拒绝路径）发的掩码是 `LockBitsAttackRequest = bit0｜bit1` —— **每一条普攻请求都会给客户端送回一个"真"**；
+- `Client_CorrectLocks_Implementation`（`:978`）**直接覆盖**本地那一份（设计 2.8 的"客户端收到后直接覆盖"）。
+
+于是"预输入窗口之前按的键"会被这样走一遍：按键（本地 `bPreInputLock = true`）→ 本机 `AN_PreInput` 正确置假（窗口打开）→ **那条请求的回声**（服务器处理时采的快照恒为真）晚到，把本地这份改回真 → 本机 `AN_ChangeAttack` 读到的仍是真 → **客户端在推进点自己进了下一段**，而服务器那边早被自己的 `AN_PreInput` 洗掉了、什么都没做。窗口宽度 ≈ 一个 RTT，所以**延迟越高越容易**（`PktLag=0` 时回声几乎落在 `AN_PreInput` 之前、被正常洗掉，故反馈二在低延迟下不出现）。
+
+**修法**：`Server_Attack` 那条请求回路的更正**不再声明 bit1**（`LockBitsAttackRequest = LockBitAttackInputLock`，`C_Character.h:456`）。理由是 3.3 起客户端那份 `bPreInputLock` 已经**两半都有同源写者**（输入点 `Attack()` 置真、自己那条 `AN_PreInput` 置假 —— 后者从 2.7 起就是这样），更正带的是**发送时刻的旧快照**，对"已由同源事件维护"的锁只会注入陈旧值（已定事项 51 的判据）。设计 2.8 那句"每一处写锁的位置都必须下发"写在客户端还没有同源写者的时候，**按 3.3 之后的实现订正**（设计文档不改，记订正到计划）。
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `Naruto/Source/Naruto/C_Character.h` | `:451-456` | `LockBitsAttackRequest` 由 `bit0｜bit1` 改为 `bit0`，注释写明理由（回声是发送时刻的快照） |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:917`（`Server_Attack` 的补发注释） | "掩码两位" → "掩码只声明 bit0" |
+| `Naruto/Source/Naruto/C_Character.cpp` | `:975-976`（`Client_CorrectLocks` 的注释） | "本地锁的复位只有这一个来源" → 说明 bit1 已无调用点、两半都由同源事件写 |
+
+**bit0 不受影响**：`bAttackInputLock` 的更正仍有必要 —— 它覆盖的是**服务器独有的写点**（`PlayerStateReset` 的受击打断复位），且它的客户端同源写者（`Attack()` 的置真、`PredictChangeAttack` 的置假）与更正**同值**，不冲突。
+
+**复验要点（在上一份清单之外加一条）**：高延迟下**在 `AN_PreInput` 之前按一次**（不要连按），客户端**不得**出现"自己进了下一段"；`Prediction.Log 1` 下 `Client_CorrectLocks` 那行日志的 `mask` 应恒为 `1`（不再出现 `3`）。
+
+**验收通过（2026-10-11，开发者实机）**：上面 ①–⑤（第二次返工版）与本节复验要点全部跑完并逐条通过 —— 低延迟（`PktLag=0`）高频输入两端同步进段、高延迟（`PktLag=150`→`300`）下预输入窗口之前按不再让客户端自行进段、`ForceReject`（多挥一下随即弹回 + 拒绝后能立刻再按）、`DropResolve`（2.0s 回滚）、收招不被表拽回、`Prediction.Attack 0`（客户端一个字都不写）、交叉输入逐条通过，`Client_CorrectLocks` 的 `mask` 恒为 `1`。**切片 3.3 整体收口。**
+
+**验收期间由开发者执行的一处蓝图改动（落在动画状态机上）**：服务器经权威值表把段号更正给客户端时，`PS->Attack` 是**跳变**（被拒绝的一段被拽回、或服务器推进的那一段带半个 RTT 才到），而不是逐段 +1；`BP_Menma` 的动画状态机原先按**单向循环**（Attack1→2→3→4→5→…）组织转移，跳变（尤其回跳）落不到任何一条转移上 → **状态机卡住**。开发者把状态机改成**各段之间任意切换**后问题消失。**这条改动在蓝图侧、由开发者执行**；口径：计划 2.0.3 只盘了通知挂载矩阵、没有状态机转移表，故此处只记"转移由单向循环改为各段可任意切换"这一事实与理由，**具体转移节点待编辑器确认**。它同时是本片两条已知代价（"跳到第 N 段驱动不了状态机"、"被拒绝的一段靠权威值表拽回"）**可接受的前提** —— 段号跳变能驱动状态机，那些代价才只是"多挥一下"/"晚半个 RTT 出手"而不是卡死。
 
 ### 3.4 切片 Move（位移 / 位置）
 
@@ -734,7 +986,7 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 30 | 摘除逐属性复制时，`Replicated` 说明符去不去掉——设计 5.2b 只对 `AC_Character` 写了"可一并去掉"，`AC_PlayerState` 那一栏只说"UPROPERTY 声明保留" | **两处都去掉**（共七个属性）。说明符留着而 `DOREPLIFETIME` 已删，等于"名义上复制、实际不注册"：读代码的人无从判断哪个是真的，也没法靠声明看出"这批属性只走表"。`UPROPERTY` 一律保留（反射 / GC / 蓝图读写照旧）；`Team` 的 `ReplicatedUsing = OnRep_Team` 与四个 CD 时间戳都不动 | 5.2b / 2.4 |
 | 31 | 2.4 的验收 1 要"客户端打印表，与服务器打印真实属性"逐字段比，验收工具放哪 | **扩展已有的私有 `Prediction.Draw`**（`DrawPredictionDebug`，2.1 建的），每条表下面加一行宿主的 `live` 值。理由：设计 3.7 冻结了两个组件的接口、扩展原则写明"必须新增接口时追加版本号"，而 `Prediction.Draw` 是私有成员、加行不改任何签名；且"表 vs 真实属性"在同一屏、同一实例上直读，不用跨窗口手抄。也替 2.6 的调试工具定了去向——同放这里 | 2.4 / 3.7 / 2.1 |
 | 32 | 敌方 PS 的绑定只在 `InitializePredictionContext` 里做，而 Tick 的重试门槛是 `CanPredict()`（只看自身三项）——自身到齐后不再重试，首次初始化若早于 `Team` 或早于对手 PS 出现，`EnemyPSAuthority` 会一直空着 | **在 `AC_Character::MyInitialize` 末尾补一次 `InitializePredictionContext()`**：该函数正是"PS 与 Team 都就绪"的时刻（服务器在 `SpawnPawnToPlayer` 里、客户端在 `OnRep_PlayerState` / `OnTeamChanged` 里），重复调用安全（重绑即覆盖，已定事项 21），不需要新接口。本工程的生成顺序（`AssignTeams` 先 `SetTeam` 再 `SpawnPawnToPlayer`，且要求两名玩家都在场）让两端都能在这一刻找齐对手；不补这一手的话，`Prediction.Draw` 的 `enemyPS` 会一直显示 `no`，阶段三的 `Enemy.PS.*` 预测也无从落地 | 3.4.1 / 2.1 / 2.4 |
-| 33 | `Server_Attack` 拒绝路径的补发，掩码里给不给 `bit0`——服务器在拒绝路径上**并没有写** `bAttackInputLock` | **给**，三个出口统一 `bit0｜bit1`（`LockBitsAttackRequest`）。掩码的语义定为"本次更正**声明**了哪几个锁"，而不是"服务器刚写过哪几位"：拒绝路径没写锁，但那一次下发的正是"你本地那次置位无效"这个结论，不声明 bit0 就送不出去，本地闸门 1 会自锁（设计 2.6.1）。接受路径的 bit0 也由这一次一并覆盖——设计 2.8 把"接受时"与"末尾补发"列成两行，落点是同一个调用点 | 2.8 / 2.6.1 / 2.5 |
+| 33 | `Server_Attack` 拒绝路径的补发，掩码里给不给 `bit0`——服务器在拒绝路径上**并没有写** `bAttackInputLock` | **给**，三个出口统一 `bit0｜bit1`（`LockBitsAttackRequest`）。掩码的语义定为"本次更正**声明**了哪几个锁"，而不是"服务器刚写过哪几位"：拒绝路径没写锁，但那一次下发的正是"你本地那次置位无效"这个结论，不声明 bit0 就送不出去，本地闸门 1 会自锁（设计 2.6.1）。接受路径的 bit0 也由这一次一并覆盖——设计 2.8 把"接受时"与"末尾补发"列成两行，落点是同一个调用点。**同日修订（2026-10-11，3.3 第二次实机返工第 2 条）**：本条里的 **bit1 已撤销** —— 这三个出口现在只发 bit0，`LockBitsAttackRequest = LockBitAttackInputLock`。理由见**已定事项 52**：客户端那份 `bPreInputLock` 由同源事件自己维护（3.3 起），这条更正携带的是发送时刻的旧快照（恒为真），晚到之后会把客户端已经置假的那一份改回真，表现为"预输入窗口之前按的键也让客户端在推进点自己进了下一段"。bit0 的理由（本条的正文）不受影响 | 2.8 / 2.6.1 / 2.5 / 3.3 |
 | 34 | `bSuccessHit` 的复位怎么落——C++ 里没有任何复位路径（设计 5.6 点明），而 5.6 又说"复位点与读取点同处" | **按开发者核对后的蓝图事实执行：写它的全工程只有两处——`OnAttackBoxOverlap` 置真（C++，本包已加下发）与 `BP_Character` 的 `I_StartHitCheck` 置假（权威分支）；读取点 `BP_Menma` 的 `I_HitJump` 只读不写**。所以 5.6 那句"读取点消费掉它之后随即复位"的前提不成立；本包按同节"**不引入新的复位时机**"保留既有复位点（`I_StartHitCheck`），新增 `AC_Character::ResetSuccessHit()`（`BlueprintCallable`，函数体自带 `HasAuthority()` 守卫）作为它的下发形态，蓝图把那条 `Set SuccsessHit = false` 换成它。让蓝图直接写 `bSuccessHit` 会绕开更正通道，客户端那一份永远停在真（5.6：客户端只经 `Client_CorrectLocks` 接收）；在 `I_HitJump` 之后另加复位等于新增复位时机，与 5.6 冲突，故不做。函数体不做"已经是假就跳过"的提前返回——重复下发幂等 | 5.6 / 2.8 / 2.5 |
 | 35 | 2.5 的验收要求"拒绝场景验证补发让客户端锁复位"，但客户端要到 3.3 才在输入瞬间本地置位——此刻两端锁值恒等，补发不可观察（发下去的就是客户端已有的值） | **新增调试命令 `Prediction.DebugLock`**（本地写、不发服务器）制造"本地值 ≠ 服务器值"。它是 3.3 之前唯一能观察补发的办法；放 `C_PredictionComponent.cpp` 的调试命令区（已定事项 31 定下的去向），不新增公开接口，`Prediction.Log 1` 下与 `SendLockCorrection` / `Client_CorrectLocks` 两条 Verbose 日志（都带角色名）成对对照 | 2.5 / 2.6.1 / 3.3 |
 | 36 | 客户端上的敌方角色（模拟代理）的预测组件永远拿不到 `Controller`，`CanPredict()` 恒为假，于是每帧重试一次初始化、每帧记一行 Verbose，`Prediction.Log 1` 之下刷满屏（开发者实机验收时提出） | **保留重试，把日志改成一次性**。引擎事实：`Controller` 不复制，远端 `PlayerController` 只发往拥有者连接（`bOnlyRelevantToOwner`）——所以客户端上非己方角色没有 Controller，这不是配置错。重试本身无害（`InitializePredictionContext` 在绑定前就返回）且"就绪后再调一次"正是设计 3.4.1 的形状，故不动；逐帧记 Verbose 会把真正要看的锁 / 回执行淹掉，故两处"还没就绪"的日志改成每个组件只记第一次（新增 `bContextPendingLogged`，成功时重新武装）并带上角色名。**给阶段三的一条提醒**：客户端上敌方角色的预测组件是惰性的，不要往它上面接预测（`Prediction.Draw` 也只画本地控制角色） | 3.4.1 / 3.2 / 2.1 / 2.5 |
@@ -745,6 +997,15 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 41 | 纯权威表现（`I_PlaySound` / `I_CameraShake`）的分发机制：蓝图 Multicast 自定义事件，还是新增 C++ `Mult_*` | **蓝图 Multicast 自定义事件**（`Replicates` = Multicast，`Reliable` 默认勾选——引擎事实，开发者确认）：把现有播放 / 晃动节点**原样搬进**新事件（引脚设置不动，表现逐位不变）、改动落在同一个图集、一笔提交一笔回退、不引入编译。走 C++ `Mult_*` 则必须把那两个节点在 C++ 里重写一遍，容易与蓝图当前设置分叉。设计 5.10 的"4 条 `Mult_*` 不加键"不受影响（新事件不带键、也不属于那 4 条）。**代价**：蓝图事件不能从 C++ 调——将来若需要从 C++ 触发这两条分发，得改走 C++ `Mult_*` | 5.9a / 5.10 / 2.7 |
 | 42 | 音效与摄像头晃动的触发口径：服从设计 5.9a 的"纯权威类"（服务器触发 + 多播分发），还是维持"各端随本地动画自行执行" | **服从设计**（开发者 2026-10-10 在被告知代价后维持原判）。澄清一句：**播放本来就是本地的**——`PlaySound2D` 与摄像头晃动只作用于本机，多播传的是**触发**不是声音本身；改的只是触发点从"各端自己的动画"挪到"服务器"。**代价**：触发要等一个网络来回——对**自己**角色的音效 / 晃屏，3.1 本地先行落地后从"零延迟"变成"一个 RTT"（阶段二两侧无差别：此时自己的动画本来也是等复制的 `MySkill` 到了才跑）；对**敌方**角色的音效基本无差（今天也是等复制的动画帧跑到通知才响）。局域网下单帧级、看不见；将来联网若觉得明显，升级路径是把它当"可预测表现"走 `RecordPresentation` 确认 / 回滚（设计 3.4.4 / 3.5），属阶段四。**不加门控的代价记在明处**：3.1 起，被拒绝 / 回滚的动作会留下一次假音效、假晃屏 | 5.9a / 3.4.4 / 3.5 / 2.7 |
 | 43 | 客户端要不要在 `BeginPlay` 里给权威值表填初值（设计 2.7.5 的"初始复制'相等即不触发 OnRep'"兜底） | **不填**（2026-10-10 缺陷修复，症状见 2.4 末尾"缺陷与修复"）。引擎对新复制 Actor 的顺序是"初始复制 → `OnRep` → `BeginPlay`"，客户端在 `BeginPlay` 里填 = 把刚收到的权威值覆盖成本地默认值，而 `OnRep` 只在变化时来——权威值再也回不来（红方客户端 `Toward` 卡在 `true`，`Move()` 发出的转向请求因此永远不成立）。**代码侧两条**：`RefreshTableFromHost` 只允许权威侧写表（"客户端从不写表"是本组件头文件原有的话，实现只差这一处）；客户端那份表的初值改由 `UC_PredictionComponent::BindAuthorityValueHost` 的**绑定即同步一次**负责（表首次到达时委托还没绑，值在表里、没人写回本地属性）。另外，`OnRep` 被跳过本来也只发生在"收到的值 == 本地当前值"，那时表里已经是服务器的值——兜底从一开始就不必要 | 2.4 / 2.7.5 / 2.8 |
+| 44 | `AN_ChangeState` 的客户端那一半写不写预测标记——设计 5.9a 的定案写"**不写预测标记**、不随技能键回滚"，而设计 2.4.1 / 2.4.2、2.0.4②、已定事项 22、协同笔记 §3.16 都写"**只写标记、不建键**" | **按 2.4.1 订正 5.9a 那半句，写标记**（2026-10-11 开发者口径：`CharacterState` 与普通属性一样，走属性预测）。这是 §3.16 那一轮（2026-10-08）的**漏订正**——该轮的连带订正清单只点了 5.9a 的 `Adamantine` 一句。**两句话在实现上并不冲突**：`MarkReplicatedAttribute` 只接受**未结算**的键（已定事项 11 的三道守卫之一），而通知跑在技能动画的 100-300ms 处、技能键半个 RTT 就被回执结算了——**写标记在常态下写不进去，它天然挂不到技能键上**，"不进本键"照旧成立；标记只在键还活着的那一段（丢回执 / 高延迟）生效，那时本地霸体被标记挡住表的第二行、随该键一起结算，正是属性预测要的语义。实现上**先判 `GetActivePredictionKeyID() != 0` 再标记**，不让它去撞 `MarkReplicatedAttribute` 那条 Warning。§3.14 记的代价（"通知不再是只切表现"）在这条实现下只出现在键还活着的那段窗口，而那一段本来就是回滚占主导 | 2.7 / 3.1 / 2.4.1 / 5.9a |
+| 45 | 客户端那一半落在哪个 C++ 入口——新增一个 `BlueprintCallable`，还是让 `ChangeState` 内部按端别分派 | **新增 `AC_Character::PredictChangeState`**（`BlueprintCallable`，函数体自带 `IsLocallyControlled()` 门控——远端的模拟代理不写、那一份等表）。`ChangeState` 保持"权威写者"不变：2.0.4① 之后它身上那句注释"本地值只留一个写者"就是为此，客户端那一半走预测接口、不从它进来。蓝图侧形状与 2.7 的 `I_StartPreInput` 一致（Authority 分支调原函数、Remote 分支调新的） | 3.1 / 2.7 / 5.8 |
+| 46 | `Prediction.Skill` 这一片开关覆盖哪些接入点 | **两个**：`FirstSkill` 输入点与 `PredictChangeState`（`AN_ChangeState` 的客户端半边）。后者不只属于技能一（技能二 / 奥义 / 通灵也走它），但它是同一原子——技能霸体——的另一半，且 3.1 期间另外三个技能还没接预测；两半放在同一个开关下，`Prediction.Skill 0` 才是干净的"本片完全不接入"（3.0 第 4 步）。**横向铺开到技能二 / 奥义 / 秘卷与通灵时沿用这个开关，不另建** | 3.1 / 3.0 |
+| 47 | 丢回执档的回滚等待（未结算键超时）在实机上观感偏长，要不要缩短 | **不改**（2026-10-11 开发者口径："我感觉也没啥必要改"）。2.0s（`C_PredictionComponent.h:332`）是设计 2.10.1 / 3.4.5 写定的兜底值，只在键永久失联时生效——正常与高延迟两档都由回执或权威值表在几十毫秒内收敛，缩短它换不到可感知的收益，反而把"表还没到就先回滚"的窗口拉大（本地先行被无谓撤销，观感更差）。**将来若要动，落点是该常量本身，设计不改**；本片按现状收口，后续切片沿用 | 3.1 / 2.10.1 / 3.4.5 |
+| 48 | 替身要不要按设计 3.6.2 替身示例预测 `Self.PS.MySkill` | **不预测**（2026-10-11，切片 3.2 开工时的口径订正）。流程图的"状态预测：`Self.PS.MySkill` = 替身（本地置位 + 标记）"一行与 3.3.2 类型表 `Escape` 行的"对应 `MySkill`…"**与本项目实现不符**：`Server_Escape_Implementation` 从不写 `MySkill`（全仓 grep：写它的只有技能 1/2/4/5 与 `ChangeAttack` / `PlayerStateReset`），`MySkill` 值域里也没有"替身"这一取值。照流程写 = 本地写一个服务器永远不会追平的值，2.7.2 的"值不等"那一行会一直保住它（本机卡在替身态直到超时/结算）。**按实现订正**：本片只预测服务器真正写的那三项（`Self.PS.CharacterState` / `Self.PS.Chakra` / `Self.Char.LastEscapeTime`）+ 位置。替身的表现由 `CharacterState = Protected` 驱动，不依赖 `MySkill`——这一点在验收里可直接观察（不预测 `MySkill` 时替身动画照常出） | 3.2 / 3.6.2 / 3.3.2 / 2.4.1 |
+| 49 | 设计 2.4.4 的"闸门 1：本地 `bAttackInputLock == false`——镜像服务器 `Server_Attack` 里的同一判据"与"不通过：不建键、不发 RPC" | **按实现订正**（2026-10-11，切片 3.3 开工时）：闸门 1 = "**服务器会不会让这次输入算一段**" = `bAttackInputLock == false`（开新段）**或** `bPreInputLock == false`（落在已打开的预输入窗口内）。理由：服务器那个 `if (bAttackInputLock == false)`（`C_Character.cpp:871-875`）只决定**开新段**（转向 + 置锁 + 段号 +1），**不是接受判据**——锁为真时函数照样在开头无条件写 `bPreInputLock = true`（`:850`，那是**预输入登记**），推进点的 `ChangeAttack` 靠它决定连段变换（`:236-243`）；**续段输入全部发生在锁为真的时刻**，照原文实现连段永远只到第一段、客户端那份 `bPreInputLock` 也再不会被置真。**不通过时的处理按 3.1／3.2 的降级约定**（不建键、不写本地值、照发**空键** RPC），而不是设计注的"不发 RPC"：两道闸门读的是本地值、可能比服务器旧一点点，让服务器裁决才等于"与接入前逐位一致"（真被吞掉的由服务器回 `Rejected` 把本地那一段拽回）。**注（同日实机返工订正）**：本条初稿还写了"段号写入点前移、服务器那次 +1 必须覆盖两种'算数'的输入"的连带改动 —— **已被实机证伪并回退**（段号在按键瞬间变 = 连段在按键瞬间切段）：`+1` 留在"锁为假"支（`:916-922`），续段的段号由推进点写（`ChangeAttack` `:244-245` / `PredictChangeAttack` `:321-325`），服务器侧与接入前逐位一致。**本条对闸门 1 的定义不受影响**（它是接受判据、不是段号写入点的判据）。另：`bPreInputLock` 也随请求本地置真（"一个窗口只算一段"要靠它） | 2.4.4 / 3.3 / 2.6.1 |
+| 50 | 设计 3.2"服务器不先行"在**侦听服务器的宿主**上靠什么保证：`CanPredict()` 不判端别（组件注释写明"端别判断在调用方入口函数里做"），而 3.1／3.2／3.3 的接入点只看 `IsLocallyControlled()`，宿主那句同时为真 | **六处接入点补 `&& !HasAuthority()`**（2026-10-11，3.3 实机返工）：`Attack` `:435-436`、`Escape` `:503-504`、技能五处 `:570` / `:624` / `:665` / `:713` / `:756`。症状：宿主普攻时，本地先行刚写的锁被**同栈内联执行**的 `Server_Attack` 看见 → `bThisInputCounts == false` → 当场 `Rejected` → 本地段号被回滚、锁卡死，**开启普攻预测后宿主无法普攻**。修法方向与组件契约一致（端别由调用方判），宿主不走本地先行、只走权威路径 = 与接入前逐位一致。**同一根因的第二处**：宿主替身经 `Escape` 本地先行瞬移后，属于自己的 `Server_Escape` 又在同栈按**已瞬移过的位置**重算落点再瞬移一次（**连瞬两次**），同一道闸门一并修掉。**不改设计措辞**（3.2 的目标不变），也不改 `CanPredict()`（它的"不判端别"是契约的一部分）。本条的适用范围不限 3.3：后续切片（3.4 位移、3.5 碰撞框）新接入的预测点同样要在调用方补端别闸门 | 3.2 / 3.3 / 2.4.4 / 3.4 |
+| 51 | 客户端那份 `bAttackInputLock` 的**解除**写在哪 —— 设计 2.6 / 2.6.1 只给了"锁在客户端输入瞬间即置位 / 复位"与更正通道，而 3.3 的输入点闸门读的正是这份值 | **两条通道，缺一不可**（2026-10-11，3.3 第二次实机返工）：**①更正补发**（2.5 通道，服务器写锁时下发 `Client_CorrectLocks`）——覆盖的是**服务器独有**的写点（`PlayerStateReset` 的 `bit0`、`OnAttackBoxOverlap` 的 `bit2`）；**②同类通知客户端半边的本地写** —— 覆盖的是**两端各自都会跑到的通知**：`bPreInputLock` 在 `AN_PreInput`（`I_StartPreInput` 非权威分支直接置假，2.7 已落）、`bAttackInputLock` 在 `AN_ChangeAttack` 的推进点（`PredictChangeAttack` 的两支：收招、窗口没被消费，第二次返工补）。**判据**：服务器会在某条**两端各自都有的通知**里写某个锁 → 客户端就在同一条通知的客户端半边写同一份；只有服务器才跑得到的写入路径 → 只走更正。**只走更正**的代价是本地这份值要晚 RTT/2 才对，输入点闸门会与服务器异源（`Attack()` 的闸门 1 读它）——实机表现就是 3.3 的两条返工反馈（低延迟高频输入时服务器进连段、客户端不出现；高延迟时预输入窗口前的按键把客户端推进下一段）。**注意这**不是**让客户端去"预测"服务器的锁写**：写入点两端同源、值是同一个布尔，本地先落只是把"δ 后到达"变成"δ 提前生效"，与接入前的取值流逐位一致 | 2.6 / 2.6.1 / 5.8 / 3.3 |
+| 52 | `Client_CorrectLocks` 的更正要不要覆盖 `bPreInputLock`（bit1）—— 设计 2.8 说"服务器每一处写锁的位置都必须下发"，而 `Server_Attack` 在函数开头无条件把 `bPreInputLock` 置真 | **不覆盖**（2026-10-11，3.3 第二次返工的第 2 条修订）：`Server_Attack` 三个出口的掩码改为**只含 bit0**（`LockBitsAttackRequest = LockBitAttackInputLock`），bit1 从此没有任何调用点发它。**理由**：3.3 起客户端那份 `bPreInputLock` 两半都有**同源写者**（输入点 `Attack()` 置真、自己那条 `AN_PreInput` 置假，后者 2.7 起就有），而这条更正带的是"服务器处理这次请求那一刻"的快照 —— `bPreInputLock` 在 `:912` 被无条件置真，所以**每一条普攻请求都会给客户端回送一个恒为真的旧值**。它晚到（δ ≈ 一个 RTT）之后会把客户端已经由 `AN_PreInput` 正确置假的那一份改回真，本机推进点 `PredictChangeAttack` 是拿这个值判"窗口有没有被消费"的 → **客户端在 `AN_ChangeAttack` 自己进了下一段，而服务器什么都没做**（实机症状就是"客户端在动画预输入之前进行的输入也会导致客户端进入下一连段"，延迟越高越容易：`PktLag=0` 时回声落在 `AN_PreInput` 之前、被正常洗掉）。**设计 2.8 那句"每一处写锁的位置都必须下发"是按"客户端没有同源写者"写的**，3.3 之后对 `bPreInputLock` 不成立（设计不改，订正记在计划 3.3 与已定事项 33 的注里）。**bit0 保留**：`bAttackInputLock` 的更正覆盖的是服务器独有的写点（`PlayerStateReset` 的受击打断复位），且与客户端同源写者同值 | 2.8 / 2.6.1 / 3.3 / 51 |
 
 ---
 
@@ -753,9 +1014,11 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 风险点 | 影响面 | 手段 |
 | --- | --- | --- |
 | 权威值表接入（2.4） | **全局**：表坏 = 属性不同步 | 单独一笔提交、逐字段比对验收、随时 `revert` |
-| 段号写入点前移（3.3） | 普攻语义 | 开关管不到 → 单独提交；回归项就是连段与收招 |
+| 段号写入点前移（3.3；**实机返工后回退**为"输入点只写开新段、推进点写续段"） | 普攻语义 | 开关管不到 → 单独提交；回归项就是连段与收招。返工后**服务器侧的段号语义与接入前逐位一致**，本片在服务器侧的净改动只剩"窗口状态采样 + 四个回执出口"（属 2.6 通道） |
 | 动画通知拆分（2.7） | 表现触发 | 开关管不到 → 单独提交；回归项是"特效不再双播"与"位移 / 连段推进 / 霸体在两端的执行一致"（客户端那一半是**新加**的，见 2.0.4①） |
 | 本地闸门与服务器判据不同源 | 出现"被拒绝的一段"、观感抖动 | 判据逐行对照（设计 2.4.4）；`ForceReject` 下逐片验收 |
 | 拒绝路径下本地锁不复位 | **输入卡死** | 2.5 的补发验收；3.3 的三连验收必须覆盖"拒绝后能立刻再按" |
+| 锁的本地解除只走更正通道（**3.3 第二次实机返工**） | 输入点闸门与服务器异源：服务器进连段、客户端不出现（低延迟高频输入）；预输入窗口前抢段（高延迟） | 同源通知的客户端半边各写一份（已定事项 51）；验收按两档延迟各压一轮（`PktLag=0` 高频 / `PktLag≥150` 连点） |
+| 更正覆盖"已有同源写者"的锁（**3.3 第二次返工的第 2 条**） | `bPreInputLock` 被回声（发送时刻旧快照）改回真 → 客户端在推进点自己进下一段（延迟越高越易） | 掩码只声明服务器独有的写点：`Server_Attack` 那条回路只发 bit0（已定事项 52）；复验看 `Client_CorrectLocks` 日志的 `mask` 恒为 `1` |
 | 超时兜底失效 | 标记残留、本地值永久偏离 | `DropResolve` 验证 2.0s 回滚 |
 | 结构改动与预测行为混在一笔提交 | 无法回退、无法定位 | 每个工作包 / 切片单独提交（第 0 节的"开关能退什么"表） |

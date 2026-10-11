@@ -23,7 +23,7 @@
   - `I_SetOtherPauseState`：权威时用传入的 `bool` 值作为参数调用 `SetOtherPauseState`
   - `I_CameraShake`：权威时调用一条 Multicast 自定义事件（同上形状，事件体内是原来的晃动节点）；客户端不再自行执行（原为无判定、两端各自执行。2026-10-10 按计划 2.7 改，开发者执行）
   - `I_ChangeGravity`：根据参数设置移动组件重力标度为 0 或 1
-  - `I_ChangeState`：权威时用传入的 `State` 作为参数调用 `ChangeState`
+  - `I_ChangeState`：权威时用传入的 `State` 作为参数调用 `ChangeState`；**非权威分支调用 `PredictChangeState`**（入参 `State` 透传。2026-10-11 按计划 3.1 补的客户端那一半，开发者执行。**不调 `ChangeState`** —— 那一条是权威写者、本地值只留一个写者；`PredictChangeState` 自带 `IsLocallyControlled()` 与本片开关两道门，远端的模拟代理不写、等表）
   - `I_Summon`：根据 `SummonIndex` 调用 `I_SpawnAttacker` 生成攻击体，0 生成查克拉秘卷，1 生成通灵魔法师
   - `I_SpawnAttacker`：权威时根据传入的攻击体类型、x、y、z 和 `Size` 生成攻击体，并将自身（即角色）设置为其 `Owner`，然后调用 `StartUse` 启用
   - `I_StopGrab`：权威时将自身抓取点设置为无效
@@ -32,7 +32,7 @@
   - `I_GiveChakra`：调用 `AddChakra`
   - `I_MakeDamage`：用传入的 `Type`、`Effect`、`Value`、`Time`、`State`、`GrabPoint` 作为参数调用 `BeDamaged`
   - `I_LockTargetToward`：权威时用 `TryTargetToward` 为 `TargetToward` 赋值
-  - `I_ChangeAttack`：权威时用传入的 `Attack` 作为参数调用 `ChangeAttack`
+  - `I_ChangeAttack`：权威时用传入的 `Attack` 作为参数调用 `ChangeAttack`；**非权威分支调用 `PredictChangeAttack`**（入参 `Attack` 透传。2026-10-11 按计划 3.3 补的客户端那一半，开发者执行 —— 与 `I_ChangeState` / `PredictChangeState` 同形。**不调 `ChangeAttack`**：那一条是权威写者；`PredictChangeAttack` 自带 `IsLocallyControlled()` + `HasAuthority()` 早退两道端别门与本片开关，远端的模拟代理不写、等表）
   - `I_ChangeBox`：本地控制时用传入的 `Size`、`Offset`、`Type` 作为参数调用 `ServerChangeBox`
   - `I_ChangeDamageValue`：权威时用传入的造成伤害相关参数为 `Type`、`Effect`、`Value`、`Time`、`State` 赋值
   - `I_MakeMove`：权威时用传入的 `Offset` 和本地的 `TargetToward` 调用 `MakeMove`
@@ -48,7 +48,7 @@
 - **AS_Menma/ 动画集**  
   调用动画通知
 - **BP_AnimMenma**  
-  状态机
+  状态机。**2026-10-11 由开发者改动（计划 3.3 验收期间）**：普攻各段的转移原先组织成**单向循环**（Attack1→2→3→4→5→…），而服务器经权威值表更正段号时 `PS->Attack` 是**跳变**（被拒绝的一段被拽回、或服务器推进的那一段带半个 RTT 才到）——跳变落不到单向循环的转移上会让**状态机卡住**。改成**各段之间可任意切换**后问题消失。本文件原盘点只记了通知挂载矩阵（计划 2.0.3），没有状态机转移表 —— 此处只记"单向循环 → 各段任意切换"这一事实与理由，**具体转移节点待编辑器确认**
 - **BP_Menma**
   - 绑定状态机并同步数据
   - `I_HitJump` 技能一命中处理：权威且 `successHit` 为真时，将 `MySkill` 设置为 3 进入派生技能，并调用 `I_GiveChakra`
