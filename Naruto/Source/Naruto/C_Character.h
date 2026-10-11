@@ -189,6 +189,22 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void ChangeState(ECharacterStateType target);
 
+	//角色状态变换——【拥有者客户端那一半】（计划 3.1 / 2.7 判定表 / 设计 2.4.1、5.9a）。
+	//AN_ChangeState 的客户端那一半走这里，不走 ChangeState（那一条是权威写者，本地值只留一个写者）：
+	//CharacterState 整条按属性预测接入（已定事项 22，与 Chakra 同路）—— 不建键、不绑生命周期，
+	//只做"本地先行写值 + 有活跃键就写标记"，之后随权威值表采用 / 回滚。
+	//自带两道门：IsLocallyControlled()（远端的模拟代理不写）与本片开关（关掉 = 与接入前一致：客户端不写）
+	UFUNCTION(BlueprintCallable)
+	void PredictChangeState(ECharacterStateType target);
+
+	//角色普攻段变换——【拥有者客户端那一半】（计划 3.3 / 2.7 判定表 / 设计 2.4.4）。
+	//AN_ChangeAttack 的客户端那一半走这里，不走 ChangeAttack（那一条是权威写者）：
+	//推进（attack != 0）什么都不写 —— 段号已在普攻输入点写过（2.4.4 的写入点前移，推进点只切表现）；
+	//收招（attack == 0）是本地先行写 0 + 有活跃键就写标记，挡住"服务器还停在最后一段"的表。
+	//自带两道门：IsLocallyControlled()（远端的模拟代理不写、那一份等表）与本片开关
+	UFUNCTION(BlueprintCallable)
+	void PredictChangeAttack(int32 attack);
+
 	//角色位移
 	UFUNCTION(BlueprintCallable)
 	void MakeMove(FVector Offset,FVector2D TargetToward);
@@ -326,11 +342,20 @@ protected:
 	void Summon(const FInputActionValue& Value);
 
 
+	//普攻请求（计划 3.3 / 设计 3.4.2）：键参数按值传（同 Server_Escape 的约定，UHT 生成的代码需要）。
+	//KeyID == 0 = 非预测请求：服务器照常校验执行、不回执（设计 3.4.2 末行）
 	UFUNCTION(Server, Reliable)
-	void Server_Attack();
+	void Server_Attack(FPredictionKey PredictionKey);
 
+	//替身请求（计划 3.2 / 设计 3.4.2）：键参数按值传（同 Server_ChangeSkillState 的约定，UHT 生成的代码需要）。
+	//KeyID == 0 = 非预测请求：服务器照常校验执行、不回执（设计 3.4.2 末行）
 	UFUNCTION(Server, Reliable)
-	void Server_Escape();
+	void Server_Escape(FPredictionKey PredictionKey);
+
+	//替身落点（计划 3.2 / 设计 5.4）：服务器与拥有者客户端各算一次，两处共用本函数 —— 落点判据必须同源
+	//（设计 2.4.4）。语义与 Server_Escape_Implementation 原实现逐行一致：从自身位置出发，对手在
+	//EscapeRange 内时取其位置，Z 归零；只多两处判空（设计 5.8：原实现对 Cast 与 GetPawn 都没有判空）
+	FVector ComputeEscapeTargetPlace() const;
 
 	//改变角色朝向
 	UFUNCTION(Server,Reliable,BlueprintCallable)
@@ -423,9 +448,12 @@ private:
 	static constexpr uint8 LockBitPreInputLock = 0x02;//bit1：预输入
 	static constexpr uint8 LockBitSuccessHit = 0x04;//bit2：命中标志
 
-	//Server_Attack 的三个出口统一发这两位：bPreInputLock 在函数开头无条件写过；bAttackInputLock 是
-	//"这次请求的锁声明"——被接受时写了它，被拒绝时没写但它必须被声明（理由同上）
-	static constexpr uint8 LockBitsAttackRequest = LockBitAttackInputLock | LockBitPreInputLock;
+	//Server_Attack 三个出口的掩码只声明 bit0（3.3 第二次实机返工的第 2 条修订）：bAttackInputLock 是
+	//"这次请求的锁声明"——被接受时写了它，被拒绝时没写但它必须被声明（理由同上）。bPreInputLock 曾经
+	//也在这两位里（函数开头无条件写过它），但那是一份【发送时刻的快照】：客户端那份 bPreInputLock 由
+	//同源事件自己维护（输入点 Attack 置真、自己那条 AN_PreInput 置假），这份晚到的旧值只会把它改回真
+	//—— 表现就是"预输入窗口之前按的键也让客户端在推进点自己进了下一段"。更改正只覆盖服务器独有的写点
+	static constexpr uint8 LockBitsAttackRequest = LockBitAttackInputLock;
 
 	//按 Mask 读出三个锁的当前值并下发（设计 2.8）。服务器的每一处写锁点调用；
 	//Server_Attack_Implementation 末尾那一次覆盖接受与拒绝两条路径（设计 2.6.1）

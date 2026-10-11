@@ -23,6 +23,13 @@ extern TAutoConsoleVariable<int32> CVarPredictionEnabled;	// Prediction.Enabled£
 extern TAutoConsoleVariable<int32> CVarPredictionLog;		// Prediction.Log£º°Ñ LogPrediction Ì§µ½ Verbose
 extern TAutoConsoleVariable<int32> CVarPredictionDraw;		// Prediction.Draw£ºÆÁÉÏ»æÖÆ¼ü / ±ê¼Ç / Ëø / ±í
 
+// ---- ÖğÆ¬¿ª¹Ø£¨Í¬±í£»Ëæ¸÷ÇĞÆ¬½¨£¬3.1 Æğ£©----
+// ÓëÉÏÃæÈı¸öÍ¬Ò»´ıÓö£º³¤ÆÚ±£Áô¡¢²»½ø Shipping ÃÅ¡£½ÓÈëµãÔÚ¡¾½¨¼üÖ®Ç°¡¿¶ÁËü ¡ª¡ª
+// ¹Øµô = ±¾Æ¬ÍêÈ«²»½ÓÈë£º²»½¨¼ü¡¢²»±ê¼Ç¡¢²»·¢´ø¼ü RPC£¬Óë½ÓÈëÇ°ÖğÎ»Ò»ÖÂ£¨¼Æ»® 3.0 µÚ 4 ²½µÄ½µ¼¶£©
+extern TAutoConsoleVariable<int32> CVarPredictionSkill;		// Prediction.Skill£º¼¼ÄÜÇĞÆ¬£¨3.1£¬ÎåÌõÊäÈë + Í¨Öª°ë±ß£©
+extern TAutoConsoleVariable<int32> CVarPredictionEscape;	// Prediction.Escape£ºÌæÉíÇĞÆ¬£¨3.2£¬Escape ÊäÈë + Î»ÖÃ»ùÏß£©
+extern TAutoConsoleVariable<int32> CVarPredictionAttack;	// Prediction.Attack£ºÆÕ¹¥¶ÎÇĞÆ¬£¨3.3£¬ÆÕ¹¥ÊäÈëµã + Í¨Öª°ë±ß£©
+
 // ---- ·şÎñÆ÷²àµ÷ÊÔ¿ª¹Ø£¨¼Æ»®"¹¤¾ßÓëµ÷ÊÔ¿ª¹Ø"±í£¬½×¶Î¶ş 2.6 ½¨£©----
 // ÕâÁ½¸öÖ»ÔÚ¡¾·Ç Shipping ¹¹½¨¡¿Àï±àÒë£¨¹¤¾ß±íµÄÔ¼¶¨£º¿ª¹ØµÄ"¹Ø"±ØĞëÊÇ°²È«Ì¬£¬µÈ¼ÛÓÚ"Î´½ÓÈë"£©¡£
 // ¶ÁÈ¡Ò»ÂÉ×ßÏÂÃæÁ½¸ö²éÑ¯º¯Êı£ºShipping ÀïºãÎª false£¬µ÷ÓÃµã²»±Ø×Ô¼ºĞ´Ìõ¼ş±àÒë¡£

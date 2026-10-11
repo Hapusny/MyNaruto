@@ -237,6 +237,10 @@ void AC_Character::ChangeAttack(int32 attack)
 		//转向走 RPC（设计 5.8）：原来直调 Server_ChangeToward_Implementation
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		//连段推进：预输入在推进点被消费成下一段，段号就在这里写 —— 这是"段的状态变换"本身
+		//（动画状态机按 PS->Attack 切段）。输入点那次 +1 只发生在"锁为假 = 开新段"那一支
+		//（Server_Attack_Implementation），续段的这一段由本处写：与接入前逐位一致
+		//（3.3 实机返工：写入点既不在输入点、也没有被跳过）
 		PS->Attack = attack;
 		MyAttack = attack;
 	}
@@ -252,12 +256,99 @@ void AC_Character::ChangeState(ECharacterStateType target)
 {
 	//权限语义（设计 5.8）：CharacterState 是服务器的量，本函数只由服务器路径调用
 	//（BP_Character 的 I_ChangeState 权威分支 / AN_ChangeState）。
-	//客户端那一半在 2.7 接上，届时走预测接口本地先行（设计 5.9a / 已定事项 22），
-	//不从这个入口进来 —— 本地值只留一个写者
+	//客户端那一半在 3.1 接上（落点写在计划 2.7 判定表：2.7 不动本接口），它走的是
+	//PredictChangeState 那条预测接口，不从这个入口进来 —— 本地值只留一个写者
 	if (!HasAuthority())return;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
 	PS->CharacterState = target;
+}
+
+void AC_Character::PredictChangeState(ECharacterStateType target)
+{
+	//AN_ChangeState 的客户端那一半（计划 3.1 / 2.7 判定表 / 设计 2.4.1、5.9a）。
+	//CharacterState 不进技能键：本函数不建键、不绑生命周期，只做"本地先行写值 + 有活跃键就写标记"，
+	//之后随权威值表采用 / 回滚（已定事项 22，与 Chakra 同路）。
+	//两道门：只对拥有者本地控制的角色生效（远端的模拟代理不写，那一份等表），以及本片开关 ——
+	//开关关掉时客户端一个字都不写，正是接入前"权威门控、只有服务器在写"的样子（2.0.4①）
+	if (!IsLocallyControlled())return;
+	if (PredictionComponent == nullptr)return;
+	if (!PredictionComponent->CanPredict())return;
+	if (CVarPredictionEnabled.GetValueOnGameThread() == 0)return;
+	if (CVarPredictionSkill.GetValueOnGameThread() == 0)return;
+
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
+	PS->CharacterState = target;
+
+	//标记只在"写这一刻还有活跃键"时写得进去 —— MarkReplicatedAttribute 拒绝已结算的键与 KeyID == 0
+	//（设计 3.4.3 冻结的两个忽略条件）。本通知跑在技能动画的 100-300ms 处，而技能键半个 RTT
+	//就被回执结算了，所以常态是【没有活跃键】：只写本地值，那一帧之后由表写回权威值 ——
+	//这就是计划 3.1 记下的已知代价，也是 5.9a 说的"不挂在技能键下"（它天然挂不到）。
+	//标记真正生效的场合是键还活着的那一段（丢回执 / 高延迟）：本地霸体被标记保住，随该键一起结算
+	const uint32 KeyID = PredictionComponent->GetActivePredictionKeyID();
+	if (KeyID != 0)
+	{
+		PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.CharacterState")), KeyID);
+	}
+}
+
+void AC_Character::PredictChangeAttack(int32 attack)
+{
+	//AN_ChangeAttack 的客户端那一半（计划 3.3 / 2.7 判定表 / 设计 2.4.4）。
+	//推进点做三件事，判据与服务器 ChangeAttack 逐条同源（含锁）：
+	//【attack == 0】= 收招 —— 本地写段号 0 并开输入锁（服务器那一支也写 bAttackInputLock = false）；
+	//【attack != 0 且预输入为真】= 连段推进 —— 这才是"段的状态变换"，本地写段号，动画状态机按
+	//本地 PS->Attack 切到下一段（切段点因此落在动画通知这一刻，与接入前一致；3.3 实机返工的订正点）；
+	//【attack != 0 且预输入为假】= 这一段的连段窗口没被消费 —— 本地开输入锁、不写段号（服务器那一支
+	//只写 bAttackInputLock = false）。三处锁写都在本地落一份，理由见函数体里那段注释
+	//两道门同 PredictChangeState：只管拥有者本地控制的那一份，以及本片开关
+	//（开关关掉时客户端一个字都不写，正是接入前"只有服务器在写"的样子，2.0.4①）；
+	//端别闸门（3.3 实机返工）：服务器不先行（设计 3.2），侦听服务器的宿主既是本机控制又是权威
+	if (!IsLocallyControlled())return;
+	if (HasAuthority())return;
+	if (PredictionComponent == nullptr)return;
+	if (!PredictionComponent->CanPredict())return;
+	if (CVarPredictionEnabled.GetValueOnGameThread() == 0)return;
+	if (CVarPredictionAttack.GetValueOnGameThread() == 0)return;
+
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (!PS)return;
+
+	//锁的本地写（3.3 第二次实机返工，2026-10-11 两条实机缺陷的根因）：本通知与 AN_PreInput 一样是
+	//【两端各自都有的通知】—— 服务器在它的 ChangeAttack 里写 bAttackInputLock，客户端就在自己这条
+	//同源通知上写同一份，与 2.7 判定表给 bPreInputLock 的客户端半边（非权威分支直接置假）完全同构。
+	//若这里不写、只等 Client_CorrectLocks，客户端的 bAttackInputLock 要比服务器晚 RTT/2 才开锁，
+	//而 Attack() 的闸门 1（开新段 / 登记预输入）读的正是它：
+	//  晚开的这段窗口里按下的键被本地判成"登记预输入"（不写段号），服务器却判成"开新段"（+1 并立刻
+	//  切段）—— 服务器进了下一段、客户端停在原地（低延迟下要高频输入才撞得上这个窄窗口）；
+	//  两端一旦因此错开一段，客户端还会在自己的本地锁已开、服务器仍在连段时判成"开新段"，多写一段
+	//  再被回执拽回 —— 高延迟下这个窗口就是一个 RTT，越延迟越容易（两条实机反馈各占一条）
+	if (attack == 0) {
+		//收招（设计 2.4.4 的收招表：服务器写 0、拥有者客户端写 0 并置预测标记、其它端不写）
+		PS->Attack = 0;
+		bAttackInputLock = false;
+	}
+	else {
+		//窗口没被消费：段号不写（服务器那一支也不写），只开输入锁
+		if (!bPreInputLock)
+		{
+			bAttackInputLock = false;
+			return;
+		}
+		PS->Attack = attack;
+	}
+
+	//两处段号本地写都是本地先行，标记只在"写这一刻还有活跃键"时写得进去（3.4.3 的两个忽略条件）。
+	//本通知跑在动画的推进帧上，而本段键半个 RTT 就被回执结算了，所以常态是【没有活跃键】：
+	//写本地值，随后由服务器同一处写入的同一个值到达（收招的 0、续段的段号，ChangeAttack 两支
+	//都写）—— 值相等，采用规则不改写本地。这正是计划 3.3 记下的已知代价，与 3.1 的
+	//PredictChangeState 同因同待遇。标记真正生效的场合是键还活着的那一段（丢回执 / 高延迟）
+	const uint32 KeyID = PredictionComponent->GetActivePredictionKeyID();
+	if (KeyID != 0)
+	{
+		PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.Attack")), KeyID);
+	}
 }
 
 void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
@@ -341,14 +432,139 @@ void AC_Character::Move(const FInputActionValue& Value)
 
 void AC_Character::Attack(const FInputActionValue& Value)
 {
-	Server_Attack();
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+
+	//预测接入点（设计 2.4.4 / 计划 3.3）。本地先行分两半，判据是同一个锁 ——
+	//【锁为假 = 开新段】这一半"输入即出招"：服务器 Server_Attack_Implementation 在"锁为假"那一支
+	//当场 +1，本地照它先行写段号；【锁为真、预输入窗口开着 = 登记预输入】这一半段号不动 ——
+	//续段的那一次"状态变换"发生在动画推进点（AN_ChangeAttack，见 PredictChangeAttack），
+	//这是接入前的行为，也是 3.3 实机返工订正的一处（上一版在输入点就 +1，连段在按键瞬间切段）。
+	//两半都建键：一次输入、一段、一个键（设计 2.4.4 的粒度）。
+	//两道闸门的服务器面完全同源：闸门 2 = 服务器的状态闸门（不通过时服务器什么都不做）；
+	//闸门 1 = 这次输入算不算一段 —— 锁为假 或 窗口开着。两者都不满足时服务器会把这次输入
+	//吞掉（窗口外的抢拍、同一个窗口里的第二次按键），本地也就不建键、不写值，走降级路径发空键
+	//端别闸门（3.3 实机返工）：服务器不先行（设计 3.2）—— 侦听服务器的宿主既是 IsLocallyControlled
+	//又是权威，光靠 IsLocallyControlled 挡不住它；它一旦本地先行，那条属于自己的 RPC 会在同一个
+	//函数栈上把自己刚置好的锁看成"这次输入不算一段"，当场回执拒绝、本地段号被滚回，宿主普攻卡死
+	uint32 KeyID = 0;
+	if (IsLocallyControlled()
+		&& !HasAuthority()
+		&& PredictionComponent != nullptr
+		&& PredictionComponent->CanPredict()
+		&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+		&& CVarPredictionAttack.GetValueOnGameThread() != 0
+		&& PS != nullptr
+		&& (PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)
+		&& (bAttackInputLock == false || bPreInputLock == false))
+	{
+		//下一次普攻输入创建新键时先冻结旧键（设计 2.4.4 的"主路径"）：同一时刻只允许一个活跃键，
+		//CreatePredictionKey 撞上活跃键会 ensure 并返回 0
+		const uint32 OldKeyID = PredictionComponent->GetActivePredictionKeyID();
+		if (OldKeyID != 0)
+		{
+			PredictionComponent->EndPredictionKey(OldKeyID);
+		}
+		KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Attack);
+	}
+
+	if (KeyID != 0) {
+		//预输入标志本地先行：服务器在每一条请求上无条件把它置真（Server_Attack_Implementation 的
+		//窗口采样之后那一行），本地跟着置真才守住"一个窗口只算一段"——否则同一个窗口里的第二次
+		//按键会被本地算成第二段（本地多挥一段、服务器只推进一段，白晃一下）
+		bPreInputLock = true;
+
+		if (bAttackInputLock == false) {
+			//开新段：与服务器同一支同步 —— 段号 +1 + 写标记。段号是表内字段（属性预测），
+			//本地写值、结算交给权威值表的采用规则（设计 2.4.1 / 2.7.2）—— "被拒绝的一段"就是这条
+			//标记随本键回滚：本地那一段被权威值表里的上一段拽回（设计 2.4.4 的"已接受的代价"）
+			PS->Attack = PS->Attack + 1;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.Attack")), KeyID);
+			//兜底（设计 2.4.4）：本键只覆盖"没有下一次预测"的结束路径 —— 收招、被打断
+			//（PlayerStateReset 一次写 Attack = 0）。回执丢失时靠它冻结，正常路径由回执结算，
+			//冻结与否都不影响标记的清除时机
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.Attack")), 0);
+
+			//本地先行置锁（设计 2.6.1）：不建快照、不随段键回滚。解除有两条 —— 服务器写锁时的
+			//Client_CorrectLocks 补发，和本地推进点 PredictChangeAttack 在同一条动画通知上的同名写入
+			//（与 bPreInputLock 在 I_StartPreInput 客户端半边被置假同构；3.3 第二次实机返工）
+			bAttackInputLock = true;
+
+			//表现记录：攻击动画随键登记，供调试查键下内容。两个委托留空 —— 被拒时段号由权威值表回滚、
+			//动画状态机按本地 PS->Attack 自己切回去，表现侧没有要手动撤销的东西
+			PredictionComponent->RecordPresentation(FName(TEXT("AttackAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+		//窗口那一半到此为止：段号不写（写入点在推进点，PredictChangeAttack），因此也没有标记可写。
+		//本键仍然发出去 —— 它的回执说的是"服务器认没认下这次输入"，那正是本地要知道的（它只写了
+		//一个锁标志，锁不进标记、也不随键回滚，解除有两条：服务器写锁时的 Client_CorrectLocks 补发，
+		//以及本地推进点 PredictChangeAttack 在同一条动画通知上的同名写入）
+	}
+
+	//带键 RPC（设计 3.4.2：三个可带键 RPC 之一）。KeyID == 0 时传空键 = 非预测请求：
+	//服务器照常校验执行、不回执，所以降级路径在这一行上与接入前逐位一致
+	Server_Attack(KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 }
 
 void AC_Character::Escape(const FInputActionValue& Value)
 {
-	//服务器进行替身
-	Server_Escape();
-	
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState<AGameStateBase>() : nullptr;
+
+	//预测接入点（设计 5.4 / 计划 3.2 的"落点"条）：与技能片不同的是，替身没有"本地 CD 归零"这种前置写法，
+	//门就是服务器那四条的本地镜像（设计 2.4.4 判据同源：Chakra / EscapeCDState / 两个受击态）。
+	//全过才建键；任一条不过 = 降级路径：不建键、不标记、不做任何本地先行，只发空键 RPC。
+	//门里读的都是本地值（Chakra / CharacterState / LastEscapeTime 走权威值表，EscapeCDState 由 Tick 从
+	//LastEscapeTime 推），本地可能比服务器旧一点点 —— 那时不预测，服务器照旧裁决（与接入前一致）
+	uint32 KeyID = 0;
+	//端别闸门（3.3 实机返工）：服务器不先行（设计 3.2）。侦听服务器的宿主既是本机控制又是权威，
+	//它一旦本地先行，那条属于自己的 Server_Escape 会在同一个函数栈上再瞬移一次（落点按已经
+	//瞬移过的位置重算）—— 宿主连瞬两次
+	if (IsLocallyControlled()
+		&& !HasAuthority()
+		&& PredictionComponent != nullptr
+		&& PredictionComponent->CanPredict()
+		&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+		&& CVarPredictionEscape.GetValueOnGameThread() != 0
+		&& PS != nullptr
+		&& GameState != nullptr
+		&& PS->Chakra != 0
+		&& EscapeCDState == 0.f
+		&& (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched))
+	{
+		KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Escape);
+	}
+
+	if (KeyID != 0) {
+		//本地先行（设计 3.6.2 的替身示例）：服务器那条被接受的路径写了三样属性，这里一一对应。
+		//三者都是表内字段（属性预测）：本地写值 + 写标记，结算交给权威值表的采用规则（设计 2.4.1 / 2.7.2）。
+		//时间戳写本地值顺带把本机 CD 立刻拉起来（EscapeCDState 由 Tick 从它推），UI 与能否再按即刻一致
+		LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+		PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.Char.LastEscapeTime")), KeyID);
+		//保护态结束（服务器 Tick 写回 Normal）即本键的生命周期终点（设计 3.4.2 的多绑定 StateName）。
+		//它只是回执丢失时的兜底冻结：正常路径由回执结算，冻结与否都不影响标记的清除时机
+		PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.CharacterState")), (uint8)ECharacterStateType::Normal);
+
+		PS->CharacterState = ECharacterStateType::Protected;
+		PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.CharacterState")), KeyID);
+		PS->Chakra = PS->Chakra - 1;
+		PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.Chakra")), KeyID);
+
+		//位置本地先行（设计 2.9 / 5.4）：先捕获一次性基线，再瞬移。落点与服务器同源（两边都调
+		//ComputeEscapeTargetPlace）。位置不写标记（设计 3.4.3：拥有者收不到自身位置复制，等不到权威值），
+		//回滚只看基线；被拒 / 超时由组件用 SetActorLocation(基线, TeleportPhysics) 送回。
+		//基线返回的 bool 不看：上一行刚建出键，活跃键必然在；真要返回 false（键已被冻结/结算）也只说明
+		//"这次位移没有基线兜底"，服务器权威路径照常走完，本机瞬移照旧
+		PredictionComponent->RecordMoveBaseline();
+		GetCharacterMovement()->StopMovementImmediately();
+		SetActorLocation(ComputeEscapeTargetPlace());
+
+		//表现记录（设计 3.6.2 末段）：替身动画 / 特效随键登记，供调试查键下内容。两个委托留空 ——
+		//被拒时 CharacterState 由权威值表回到原值，动画状态机自己切回去，表现侧没有要手动撤销的东西
+		PredictionComponent->RecordPresentation(FName(TEXT("EscapeAnim")), FConfirmDelegate(), FRollbackDelegate());
+	}
+
+	//带键 RPC（设计 3.4.2：三个可带键 RPC 之一）。KeyID == 0 时传空键 = 非预测请求：服务器照常校验
+	//执行、不回执，所以降级路径在这一行上与接入前逐位一致（接入前就是一条不带参的 Server_Escape）
+	Server_Escape(KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 }
 
 void AC_Character::FirstSkill(const FInputActionValue& Value)
@@ -363,10 +579,46 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	if (FirstSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		//键先传空：签名按设计 3.4.2 的挂载约束提前在 2.6 落地（三个可带键 RPC 之一），
-		//真正的键由切片 3.1 在输入点创建后填进来。空键 = 非预测请求：服务器照常校验执行、不回执
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1, FPredictionKey());
-		LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
+
+		//预测接入点（设计 3.6.1 / 计划 3.0 固定动作 1）：本机控制（函数开头已判）+ 能预测 + 本片开关
+		//四条都过才建键（末条端别闸门是 3.3 实机返工补的）。任一条不过 = 降级路径：不建键、
+		//不标记、不做任何本地先行，只发空键 RPC
+		uint32 KeyID = 0;
+		//端别闸门（3.3 实机返工）：侦听服务器的宿主既是本机控制又是权威，服务器不先行（设计 3.2）
+		if (!HasAuthority()
+			&& PredictionComponent != nullptr
+			&& PredictionComponent->CanPredict()
+			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
+		{
+			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
+		}
+
+		if (KeyID != 0) {
+			//本地先行（设计 3.6.1）：MySkill 是状态量、LastFirstSkillTime 是属性，两者都"本地写值 +
+			//写标记"，结算交给权威值表（设计 2.4.1 / 2.7.2 的采用规则）。技能一不消耗查克拉，
+			//所以本输入没有 Chakra 项 —— 那是奥义的事（计划 3.1 的"奥义"条）
+			PS->MySkill = 1;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.MySkill")), KeyID);
+			//技能结束（本地 MySkill 归 0）时自动冻结本键（设计 3.4.2 / 计划 3.1 的"冻结"条）
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.MySkill")), 0);
+			LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.Char.LastFirstSkillTime")), KeyID);
+			//表现记录（设计 3.6.1 末段）：技能动画随键登记，供调试查键下内容。
+			//两个委托都留空 —— 被拒时 MySkill 由权威值表回到原值，动画状态机自己切回去，
+			//表现侧没有需要手动撤销的东西
+			PredictionComponent->RecordPresentation(FName(TEXT("SkillAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+		else {
+			//降级路径照旧记本地时间戳（接入前就是这个行为），只是没有标记、也就没有"等表写回"
+			LastFirstSkillTime = GameState->GetServerWorldTimeSeconds();
+		}
+
+		//带键 RPC（设计 3.4.2：三个可带键 RPC 之一，技能请求只能落在它上面）。
+		//KeyID == 0 时传空键 = 非预测请求：服务器照常校验执行、不回执（设计 3.4.2 末行），
+		//所以降级路径在这一行上与接入前逐位一致
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(1,
+			KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 		BP_FirstSkillEffect();
 	}
 }
@@ -383,8 +635,34 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	if (SecondSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2, FPredictionKey());
-		LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
+		//预测接入点（计划 3.1 的"横向铺开"条，与 FirstSkill 同形）：三条都过才建键，
+		//建不出来就是降级路径 —— 只发空键 RPC，与接入前逐位一致
+		uint32 KeyID = 0;
+		//端别闸门（3.3 实机返工）：侦听服务器的宿主既是本机控制又是权威，服务器不先行（设计 3.2）
+		if (!HasAuthority()
+			&& PredictionComponent != nullptr
+			&& PredictionComponent->CanPredict()
+			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
+		{
+			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
+		}
+
+		if (KeyID != 0) {
+			//本地先行：MySkill = 2 + 标记 + 冻结，CD 时间戳照旧本地记一份并写标记
+			PS->MySkill = 2;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.MySkill")), KeyID);
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.MySkill")), 0);
+			LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.Char.LastSecondSkillTime")), KeyID);
+			PredictionComponent->RecordPresentation(FName(TEXT("SkillAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+		else {
+			LastSecondSkillTime = GameState->GetServerWorldTimeSeconds();
+		}
+
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(2,
+			KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 		BP_SecondSkillEffect();
 	}
 }
@@ -399,9 +677,35 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		//预测接入点（计划 3.1"横向铺开"条的"奥义"）：奥义同样成键（每个技能取值一个键，设计 2.4.4）
+		uint32 KeyID = 0;
+		//端别闸门（3.3 实机返工）：侦听服务器的宿主既是本机控制又是权威，服务器不先行（设计 3.2）
+		if (!HasAuthority()
+			&& PredictionComponent != nullptr
+			&& PredictionComponent->CanPredict()
+			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
+		{
+			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
+		}
+
+		if (KeyID != 0) {
+			//本地先行：MySkill = 5 + 标记 + 冻结；奥义不记时间戳（它消耗查克拉，不是 CD，与服务器一致）
+			PS->MySkill = 5;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.MySkill")), KeyID);
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.MySkill")), 0);
+			//查克拉预扣：下面那条 Server_ChangeChakra(0) 不带键（设计 3.4.2 禁止同一次输入发两条带键 RPC），
+			//所以标记登记在【本次输入的键】下，由该键的回执结算 —— Confirmed 只清标记（服务器也扣了，本地留 0）；
+			//Rejected / 超时按设计 2.7.2 从权威值表写回：服务器没扣（它那条判据还要求 MySkill 已经是 5），表里仍是 4
+			PS->Chakra = 0;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.Chakra")), KeyID);
+			PredictionComponent->RecordPresentation(FName(TEXT("SkillAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+
 		//顺序（计划 2.3）：技能请求排在查克拉清零之前。服务器的判据是"满查克拉才接受奥义"，
 		//清零先到的话服务器看到的就是 0 了 —— 两条请求在同一 Actor 上，同通道、按序到达
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5, FPredictionKey());
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(5,
+			KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 		Cast<AC_PlayerController>(Controller)->Server_ChangeChakra(0);
 		BP_FinalSkillEffect();
 	}
@@ -419,9 +723,34 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 	if (ScrollCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		//预测接入点（计划 3.1"横向铺开"条的"秘卷"）：MySkill = 4（秘卷与通灵同值、同动画，设计 2.4.4），
+		//两个的区分量 SummonIndex 不进键判据，上面那条 Server_SetSummonIndex 照旧不带键、不做预测
 		Server_SetSummonIndex(0);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4, FPredictionKey());
-		LastScrollTime = GameState->GetServerWorldTimeSeconds();
+		uint32 KeyID = 0;
+		//端别闸门（3.3 实机返工）：侦听服务器的宿主既是本机控制又是权威，服务器不先行（设计 3.2）
+		if (!HasAuthority()
+			&& PredictionComponent != nullptr
+			&& PredictionComponent->CanPredict()
+			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
+		{
+			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
+		}
+
+		if (KeyID != 0) {
+			PS->MySkill = 4;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.MySkill")), KeyID);
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.MySkill")), 0);
+			LastScrollTime = GameState->GetServerWorldTimeSeconds();
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.Char.LastScrollTime")), KeyID);
+			PredictionComponent->RecordPresentation(FName(TEXT("SkillAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+		else {
+			LastScrollTime = GameState->GetServerWorldTimeSeconds();
+		}
+
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4,
+			KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 	}
 }
 
@@ -437,66 +766,171 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	if (SummonCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
+		//预测接入点（计划 3.1"横向铺开"条的"通灵"）：与秘卷同值 4、共用同一个键判据与开关，
+		//差别只在上面那条 Server_SetSummonIndex(1)（不带键、不进键判据）
 		Server_SetSummonIndex(1);
-		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4, FPredictionKey());
-		LastSummonTime = GameState->GetServerWorldTimeSeconds();
-	}
-}
-
-void AC_Character::Server_Escape_Implementation()
-{
-	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
-	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
-	if (!GameState)return;
-	if (!PS)return;
-	if (PS->Chakra == 0)return;
-	if (EscapeCDState == 0.f) {
-		if (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched) {
-			LastEscapeTime = GameState->GetServerWorldTimeSeconds();
-			ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
-			ProtectedTime = EscapeProtectedTime;
-
-			//受击框为无碰撞，进入保护状态
-			Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
-			PS->CharacterState = ECharacterStateType::Protected;
-
-			GetCharacterMovement()->StopMovementImmediately();
-
-			//移动到替身位置
-			FVector TargetPlace = GetActorLocation();
-			for (APlayerState* OtherPS : GameState->PlayerArray) {
-				if (Cast<AC_PlayerState>(OtherPS)->Team != PS->Team) {
-					float Distance = FVector::Distance(OtherPS->GetPawn()->GetActorLocation(), GetActorLocation());
-					if (Distance <= EscapeRange)TargetPlace = OtherPS->GetPawn()->GetActorLocation();
-				}
-			}
-			TargetPlace.Z = 0.f;
-			SetActorLocation(TargetPlace);
-
-			//查克拉减少
-			Cast<AC_PlayerController>(Controller)->Server_ChangeChakra_Implementation(PS->Chakra - 1);
+		uint32 KeyID = 0;
+		//端别闸门（3.3 实机返工）：侦听服务器的宿主既是本机控制又是权威，服务器不先行（设计 3.2）
+		if (!HasAuthority()
+			&& PredictionComponent != nullptr
+			&& PredictionComponent->CanPredict()
+			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
+			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
+		{
+			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
+
+		if (KeyID != 0) {
+			PS->MySkill = 4;
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.PS.MySkill")), KeyID);
+			PredictionComponent->BindStateLifecycle(KeyID, FName(TEXT("Self.PS.MySkill")), 0);
+			LastSummonTime = GameState->GetServerWorldTimeSeconds();
+			PredictionComponent->MarkReplicatedAttribute(FName(TEXT("Self.Char.LastSummonTime")), KeyID);
+			PredictionComponent->RecordPresentation(FName(TEXT("SkillAnim")), FConfirmDelegate(), FRollbackDelegate());
+		}
+		else {
+			LastSummonTime = GameState->GetServerWorldTimeSeconds();
+		}
+
+		Cast<AC_PlayerController>(Controller)->Server_ChangeSkillState(4,
+			KeyID != 0 ? PredictionComponent->GetActivePredictionKey() : FPredictionKey());
 	}
+}
+
+//替身落点（计划 3.2 / 设计 5.4）：服务器与拥有者客户端共用本函数 —— 落点判据必须同源（设计 2.4.4）。
+//逐行对应 Server_Escape_Implementation 原实现的那段循环（对手在 EscapeRange 内就取对手位置），
+//只多两处判空（设计 5.8）：原实现对 Cast 结果与 GetPawn() 都没判空，前者遇到非 AC_PlayerState
+//的 PlayerState 直接崩，后者在对手没有 Pawn 时崩
+FVector AC_Character::ComputeEscapeTargetPlace() const
+{
+	FVector TargetPlace = GetActorLocation();
+
+	const AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState<AGameStateBase>() : nullptr;
+	if (PS == nullptr || GameState == nullptr) {
+		TargetPlace.Z = 0.f;
+		return TargetPlace;
+	}
+
+	for (APlayerState* OtherPS : GameState->PlayerArray) {
+		const AC_PlayerState* OtherMyPS = Cast<AC_PlayerState>(OtherPS);
+		if (OtherMyPS == nullptr || OtherMyPS->Team == PS->Team)continue;
+		const APawn* OtherPawn = OtherMyPS->GetPawn();
+		if (OtherPawn == nullptr)continue;
+		const float Distance = FVector::Distance(OtherPawn->GetActorLocation(), GetActorLocation());
+		if (Distance <= EscapeRange)TargetPlace = OtherPawn->GetActorLocation();
+	}
+
+	TargetPlace.Z = 0.f;
+	return TargetPlace;
+}
+
+void AC_Character::Server_Escape_Implementation(FPredictionKey PredictionKey)
+{
+	//Result 取值：0 = Confirmed，1 = Rejected（设计 2.11.1）。
+	//键无效（KeyID == 0）时 SendPredictionResolve 自己跳过：降级路径照常校验执行、不回执
+	//（设计 3.4.2 的约定），所以生产调用点传空键时行为与改造前逐位一致
+	const uint8 RejectResult = 1;
+	const uint8 ConfirmResult = 0;
+
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState<AGameStateBase>() : nullptr;
+	//PC 的判空是新增的（设计 5.8）：本函数的每一处回执、以及末尾扣查克拉都要通过它，原实现在那条路上
+	//直接 Cast<AC_PlayerController>(Controller)->... 没有判空。判空命中只可能出现在"没有控制者的角色"上，
+	//那条路上原实现本来也走不完（会崩），这里退化成"不执行、不回执"更贴切
+	AC_PlayerController* PC = Cast<AC_PlayerController>(Controller);
+	if (PC == nullptr || !PS || !GameState)return;
+
+	//调试开关（计划 2.6 工具表）：带键请求一律拒绝、且不写权威值 —— 回滚路径 100% 可复现。
+	//本片起它还要复现【位置回滚】：替身是第一个带位置基线的切片，被拒时位置必须回到基线
+	//只作用于【带键】请求：不带键的请求没有本地预测可回滚，拒掉它只会让开关打开时玩不了
+	if (PredictionKey.IsValidKey() && IsPredictionForceRejectEnabled())
+	{
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.ForceReject: %s rejects the keyed escape request without writing anything"), *GetName());
+		PC->SendPredictionResolve(PredictionKey, RejectResult);
+		return;
+	}
+
+	//以下三条即客户端本地门的镜像（设计 2.4.4 判据同源：Chakra / EscapeCDState / 两个受击态）。
+	//三者取反就是原来的嵌套 if ——原实现在不满足时什么都不做，现在多出一条回执（只对带键请求有意义）
+	if (PS->Chakra == 0) { PC->SendPredictionResolve(PredictionKey, RejectResult); return; }
+	if (EscapeCDState != 0.f) { PC->SendPredictionResolve(PredictionKey, RejectResult); return; }
+	if (!(PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched)) { PC->SendPredictionResolve(PredictionKey, RejectResult); return; }
+
+	LastEscapeTime = GameState->GetServerWorldTimeSeconds();
+	ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
+	ProtectedTime = EscapeProtectedTime;
+
+	//受击框为无碰撞，进入保护状态
+	Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
+	PS->CharacterState = ECharacterStateType::Protected;
+
+	GetCharacterMovement()->StopMovementImmediately();
+
+	//移动到替身位置（计划 3.2：落点计算抽成 ComputeEscapeTargetPlace，与拥有者客户端同源）
+	SetActorLocation(ComputeEscapeTargetPlace());
+
+	//查克拉减少
+	PC->Server_ChangeChakra_Implementation(PS->Chakra - 1);
+
+	//接受：回执放在权威值写完之后（设计 2.11.1）。上面那次扣查克拉是同一 Actor 上的直接调用，保序
+	PC->SendPredictionResolve(PredictionKey, ConfirmResult);
 }
 
 
 
-void AC_Character::Server_Attack_Implementation()
+void AC_Character::Server_Attack_Implementation(FPredictionKey PredictionKey)
 {
+	//回执出口（设计 2.11.1 / 计划 3.3）：0 = 接受，1 = 拒绝。KeyID == 0 的非预测请求由
+	//SendPredictionResolve 自己跳过 —— 降级路径照常校验执行、不回执（设计 3.4.2 的约定），
+	//所以生产调用点传空键时行为与改造前逐位一致
+	const uint8 RejectResult = 1;
+	const uint8 ConfirmResult = 0;
+	//回执只对带键请求有意义，而带键请求必然来自拥有者客户端（有 PC）。PC 判空纯属防御：
+	//命中时权威路径照走（原实现整条路都不用 PC），只是不回执
+	AC_PlayerController* PC = Cast<AC_PlayerController>(Controller);
+
+	//服务器侧强制拒绝（工具表 Prediction.ForceReject，仅非 Shipping）：带键请求一律拒绝、且一个字段都不写，
+	//回滚路径 100% 可复现。只作用于【带键】请求 —— 不带键的请求没有本地预测可回滚，拒掉它只会让开关打开时玩不了。
+	//拒绝路径没写锁，所以返回前要补发一次更正：客户端的本地段号与本地锁都还停在预测值上（设计 2.6.1）
+#if !UE_BUILD_SHIPPING
+	if (PredictionKey.IsValidKey() && IsPredictionForceRejectEnabled())
+	{
+		UE_LOG(LogPrediction, Log, TEXT("Prediction.ForceReject: %s rejects the keyed attack request without writing anything"), *GetName());
+		SendLockCorrection(LockBitsAttackRequest);
+		if (PC != nullptr)PC->SendPredictionResolve(PredictionKey, RejectResult);
+		return;
+	}
+#endif
+
+	//窗口状态必须在下面那次置真【之前】采样（设计 2.4.4）：本次输入算不算一段，看的是"输入到达时"
+	//的那个窗口 —— 窗口开着（bPreInputLock 为假）= 这次输入会被推进点消费成连段；锁为假 = 这次输入开新段。
+	//两者都不满足 = 服务器会把这次输入吞掉（窗口外的抢拍、或同一个窗口里的第二次按键）
+	const bool bPreInputWindowOpen = (bPreInputLock == false);
+	const bool bThisInputCounts = (bAttackInputLock == false) || bPreInputWindowOpen;
+
 	bPreInputLock = true;
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	//判空（设计 5.8）：下一行就要读 PS->CharacterState，原来没有任何判空
 	//锁更正（设计 2.6.1 / 2.8）：本函数三个出口（含两条拒绝路径）都要在返回前按当时的最新锁值
 	//补发一次 —— 被拒绝时服务器并没有写锁，客户端本地那次置位靠这一次才被解除，
-	//否则本地闸门 1 会自锁（设计 2.6.1）。掩码两位的理由见 LockBitsAttackRequest
+	//否则本地闸门 1 会自锁（设计 2.6.1）。掩码只声明 bit0，理由见 LockBitsAttackRequest
 	if (!PS) {
 		SendLockCorrection(LockBitsAttackRequest);
+		if (PC != nullptr)PC->SendPredictionResolve(PredictionKey, RejectResult);
 		return;
 	}
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)) {
 		SendLockCorrection(LockBitsAttackRequest);
+		if (PC != nullptr)PC->SendPredictionResolve(PredictionKey, RejectResult);
 		return;
 	}
+
+	//段号写入点（计划 3.3 / 设计 2.4.4）：服务器写的是"已请求的段数"，但一次输入只有在
+	//【锁为假 = 开新段】时才当场 +1（顺带结算转向）；【锁为真、窗口开着 = 登记预输入】不算段 ——
+	//续段的那一段由动画推进点的 ChangeAttack 写（它的 bPreInputLock 支），那里才是连段的状态变换。
+	//被吞掉的那一种（锁为真、窗口也关着）一个字段都不写，只回拒绝
+	//（3.3 实机返工：上一版让这次 +1 也覆盖了窗口那一支，两端都在按键瞬间切段，连段提前一段）
 	if (bAttackInputLock == false) {
 		if (TryTargetToward.X > 0)Server_ChangeToward_Implementation(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward_Implementation(false);
@@ -504,6 +938,13 @@ void AC_Character::Server_Attack_Implementation()
 		PS->Attack = PS->Attack + 1;
 		MyAttack = PS->Attack;
 	}
+
+	//接受与否在权威值写完之后回执（设计 2.11.1）：同一 Actor 上的直接调用保序。
+	//被吞掉的一次输入也要回执：客户端本地已经把锁先行置真（窗口那一半就只有这一个写入），
+	//"服务器不认这次输入"是它唯一拿得到的信号；收到之后本地不会在推进点预测那一段
+	//（设计 2.4.4 的"被拒绝的一段"：多挥一下随即弹回，段号由权威值表拽回）
+	if (PC != nullptr)PC->SendPredictionResolve(PredictionKey, bThisInputCounts ? ConfirmResult : RejectResult);
+
 	//被接受时的写锁下发也由这一次覆盖（设计 2.8 的第一行与第二行是同一个调用点）
 	SendLockCorrection(LockBitsAttackRequest);
 }
@@ -531,7 +972,8 @@ void AC_Character::Client_CorrectLocks_Implementation(uint8 LockMask, uint8 Lock
 {
 	//客户端：直接覆盖本地锁值（设计 2.6.1 / 2.8）—— 不建键、不记录、不做任何结算。
 	//只写掩码覆盖的锁：服务器没声明的那几位是客户端自己的本地先行值，不能拿服务器的旧值抹掉。
-	//普攻被拒绝时，本地那次置位就是靠这条更正解除的（本地锁的复位只有这一个来源）
+	//普攻被拒绝时，本地那次置位就是靠这条更正解除的。bPreInputLock 现在没有任何更正调用点：
+	//它的两份（真/假）都由两端的同源事件各自写（输入点 Attack / 各自的 AN_PreInput，3.3 第二次实机返工）
 	if (LockMask & LockBitAttackInputLock)bAttackInputLock = (LockValues & LockBitAttackInputLock) != 0;
 	if (LockMask & LockBitPreInputLock)bPreInputLock = (LockValues & LockBitPreInputLock) != 0;
 	if (LockMask & LockBitSuccessHit)bSuccessHit = (LockValues & LockBitSuccessHit) != 0;

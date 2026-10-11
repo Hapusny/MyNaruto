@@ -32,6 +32,34 @@ TAutoConsoleVariable<int32> CVarPredictionDraw(
 	TEXT("Draw the prediction state of the locally controlled character: context, keys, markers, locks and authority value tables."),
 	ECVF_Default);
 
+// 逐片开关（计划"工具与调试开关"表；3.1 建）。与上面三个同一待遇：长期保留、不进 Shipping 门。
+// 只在【接入点】读取：关掉 = 本片不接入（不建键 / 不标记 / 不发带键 RPC），与接入前逐位一致。
+// 这一片覆盖【五个技能输入点】—— FirstSkill / SecondSkill / FinalSkill / Scroll / Summon（C_Character.cpp）
+// ——与 AN_ChangeState 的客户端那一半入口 PredictChangeState（同上）：后者虽然不属于某一个技能，
+// 但它是同一原子（技能霸体）的另一半，跟着本片一起开关（已定事项 46：横向铺开沿用本开关，不另建）
+TAutoConsoleVariable<int32> CVarPredictionSkill(
+	TEXT("Prediction.Skill"),
+	1,
+	TEXT("Skill slice (plan 3.1). 0 = off: the five skill input points and the change-state notify fall back to the original path (no key, no marker, plain RPC)."),
+	ECVF_Default);
+
+// 这一片覆盖【替身】—— Escape 输入点与它对应的服务器路径 Server_Escape（C_Character.cpp 两侧）。
+// 与技能片的差别在"落点"：本片是第一个带位置基线的切片，关掉它 = 不预测位置、也不做属性先行
+TAutoConsoleVariable<int32> CVarPredictionEscape(
+	TEXT("Prediction.Escape"),
+	1,
+	TEXT("Escape slice (plan 3.2). 0 = off: the escape input point falls back to the original path (no key, no marker, no local teleport, plain RPC)."),
+	ECVF_Default);
+
+// 这一片是"普攻段"（Attack）：输入点 = AC_Character::Attack，通知半边 = AN_ChangeAttack -> PredictChangeAttack。
+// 段号写入点前移（设计 2.4.4）是本片的核心，但开关关掉时不是"回到推进点写"而是【本片完全不接入】：
+// 输入点不建键、不写段号、不置锁，只发不带键的 RPC —— 与接入前逐位一致（计划 3.0 第 4 步的降级）
+TAutoConsoleVariable<int32> CVarPredictionAttack(
+	TEXT("Prediction.Attack"),
+	1,
+	TEXT("Attack slice (plan 3.3). 0 = off: the attack input point falls back to the original path (no key, no marker, no local segment write, plain RPC)."),
+	ECVF_Default);
+
 // Prediction.Log 1 → LogPrediction 抬到 Verbose：建键 / 冻结 / 结算 / 回滚与采用规则命中行都记在 Verbose 上。
 // 分类本身已按 Log 注册（阶段一 W1.2），这里只调运行时的工作详细度（FLogCategoryBase::SetVerbosity
 // 会按编译期详细度钳制，本分类的编译期值是 All，Verbose 打得开）
