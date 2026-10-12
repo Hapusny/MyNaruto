@@ -29,6 +29,7 @@ extern TAutoConsoleVariable<int32> CVarPredictionDraw;		// Prediction.Draw：屏上
 extern TAutoConsoleVariable<int32> CVarPredictionSkill;		// Prediction.Skill：技能切片（3.1，五条输入 + 通知半边）
 extern TAutoConsoleVariable<int32> CVarPredictionEscape;	// Prediction.Escape：替身切片（3.2，Escape 输入 + 位置基线）
 extern TAutoConsoleVariable<int32> CVarPredictionAttack;	// Prediction.Attack：普攻段切片（3.3，普攻输入点 + 通知半边）
+extern TAutoConsoleVariable<int32> CVarPredictionMove;		// Prediction.Move：位移切片（3.4 重做，只有客户端那一半入口读它）
 
 // ---- 服务器侧调试开关（计划"工具与调试开关"表，阶段二 2.6 建）----
 // 这两个只在【非 Shipping 构建】里编译（工具表的约定：开关的"关"必须是安全态，等价于"未接入"）。

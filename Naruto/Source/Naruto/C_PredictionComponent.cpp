@@ -60,6 +60,19 @@ TAutoConsoleVariable<int32> CVarPredictionAttack(
 	TEXT("Attack slice (plan 3.3). 0 = off: the attack input point falls back to the original path (no key, no marker, no local segment write, plain RPC)."),
 	ECVF_Default);
 
+// 这一片是"位移"（Move）：落点 = AN_MakeMove 的【客户端那一半】入口 AC_Character::PredictMakeMove
+// （计划 3.4 重做）。与前三片的根本差别：位移【不建键、不写标记】—— 它走移动组件（根运动源），
+// 不是表内属性，所以本开关不进任何判定表，只在接入点读一次。
+// 关掉它 = 客户端不做本地先行：位移只由服务器那一半施加，客户端照接入前那样靠引擎校正跟随 ——
+// 这正是"两端同值"要验的那一档（计划 3.4 重做的验收）。
+// 注意它【不是】位移机制的开关：服务器那一半无论本开关取值都照常施加（权威位移必须发生，
+// 它是对手屏幕上唯一能看到位移的地方，见那处的注释）
+TAutoConsoleVariable<int32> CVarPredictionMove(
+	TEXT("Prediction.Move"),
+	1,
+	TEXT("Move slice (plan 3.4 redo). 0 = off: the owning client does not predict the displacement (AN_MakeMove's client half is skipped) and follows the server through the engine's correction channel as before."),
+	ECVF_Default);
+
 // Prediction.Log 1 → LogPrediction 抬到 Verbose：建键 / 冻结 / 结算 / 回滚与采用规则命中行都记在 Verbose 上。
 // 分类本身已按 Log 注册（阶段一 W1.2），这里只调运行时的工作详细度（FLogCategoryBase::SetVerbosity
 // 会按编译期详细度钳制，本分类的编译期值是 All，Verbose 打得开）

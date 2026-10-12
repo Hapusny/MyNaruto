@@ -231,6 +231,12 @@ void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill
 
 	PS->MySkill = TargetSkill;
 
+	//位移预测的校正抑制开边（计划 3.4 W4.1 第二次实机返工 / 已定事项 53、55、59）：技能这一支在写 MySkill 的
+	//同一处就地置闩锁 + 置移动组件那个引擎开关（普攻那一支在 AC_Character::Server_Attack_Implementation 的开段分支）。
+	//位置选在这里而不是函数开头：上面那些拒绝路径都是"动作没在服务器开起来"，窗口也就没开；
+	//窗口的合边（动作结束）与两条开边共用一个闩锁，见 AC_Character::Tick 的服务器块
+	Char->MarkActionPredictedByClient();
+
 	//被接受的输入在这里记下服务器侧的权威 CD 时间戳（设计 5.3 的四个时间戳）：
 	//客户端在输入函数里也记一份，那是本地先行值；服务器这一份是权威值，2.4 起由权威值表下发给客户端。
 	//服务器不写的话，上面那些 CD 判据永远是"没在冷却"（服务器这份时间戳恒为 0），拒绝路径形同虚设

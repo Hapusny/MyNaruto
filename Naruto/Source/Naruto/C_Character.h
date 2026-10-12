@@ -205,9 +205,29 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void PredictChangeAttack(int32 attack);
 
-	//角色位移
+	//角色位移——【权威那一半】（计划 3.4 重做 / 设计 2.9：两端各自执行）。
+	//3.4 重做起，位移不再裸写位置：折算 + 场地钳制之后，交给移动组件一份根运动源
+	//（ComputeMoveOffset + ApplyMoveRootMotion）。两端的位移量同源、物理过程同一条路
 	UFUNCTION(BlueprintCallable)
 	void MakeMove(FVector Offset,FVector2D TargetToward);
+
+	//角色位移——【拥有者客户端那一半】（计划 3.4 重做 / 设计 2.9）。
+	//AN_MakeMove 这条通知两端都有：权威那一半（上面 MakeMove）是"对手屏幕上唯一能看到位移的地方"
+	//—— 客户端施加的根运动源【到不了服务器】（5.3 的 ServerMove 载荷里没有任何根运动字段，
+	//见开发计划 3.4 重做的引擎证据表），所以服务器必须自己施加它那一份；
+	//拥有者客户端这一半是本地先行：同一个 ComputeMoveOffset、同一种源，差别只有时刻（客户端早 RTT/2）。
+	//自带四道门：IsLocallyControlled() / HasAuthority() 早退（侦听服务器的宿主不预测，逐字同 3.3）、
+	//组件与 CanPredict()、以及 Prediction.Enabled / Prediction.Move 两个开关
+	UFUNCTION(BlueprintCallable)
+	void PredictMakeMove(FVector Offset, FVector2D TargetToward);
+
+	//位移预测的【校正抑制】闩锁开启点（计划 3.4 W4.1 第二次实机返工 / 已定事项 53、55、59）。
+	//由【服务器】在动作被请求开起来时调用：普攻那一支在 AC_Character::Server_Attack_Implementation 的开段分支，
+	//技能那一支在 AC_PlayerController::Server_ChangeSkillState_Implementation 写 MySkill 的同一处。
+	//本函数置闩锁，并【就地】把移动组件的 bIgnoreClientMovementErrorChecksAndCorrection 置真 ——
+	//收到的一批包在同一次收包相位里连续处理，Tick 里那一遍写插不进那个相位（见实现处的注释）。
+	//合边只有一处：Tick 的服务器块（动作窗口关闭 Attack == 0 && MySkill == 0 时清闩锁并同步引擎开关）
+	void MarkActionPredictedByClient();
 
 	//打开预输入窗口（AN_PreInput，计划 2.2 / 已定事项 24）
 	//置假之后，窗口内的一次普攻输入由 Server_Attack_Implementation 置回真，
@@ -242,6 +262,12 @@ public:
 	//命中判断
 	UPROPERTY(BlueprintReadWrite)
 	bool bSuccessHit = false;
+
+	//位移预测的校正抑制闩锁（计划 3.4 W4.1 第二次实机返工 / 已定事项 53、55、59）：
+	//纯服务器侧的量，不是复制量、不进权威值表 —— 它只决定"服务器这一端要不要发位置校正"。
+	//置/清都在服务器：置在 MarkActionPredictedByClient（动作被请求开起来那一次），清在 Tick 的服务器块。
+	//客户端不读它，客户端那一侧唯一相关的是"Prediction.Move 关掉时本地位移整个不做"（PredictMakeMove 的门）
+	bool bActionPredictedByClient = false;
 
 	//---- 锁更正通道（设计 2.8 / 5.5，计划 2.5）----
 	//三个锁都不加 Replicated、不进权威值表、不参与结算（设计 2.6.2）：服务器在每一处写锁之后，
@@ -357,6 +383,20 @@ protected:
 	//EscapeRange 内时取其位置，Z 归零；只多两处判空（设计 5.8：原实现对 Cast 与 GetPawn 都没有判空）
 	FVector ComputeEscapeTargetPlace() const;
 
+	//位移折算与场地钳制（计划 3.4 重做）：MakeMove 与 PredictMakeMove 共用。
+	//把原实现在 MakeMove 里的那两段（按移动意图与朝向折算、按 MaxLocation / MinLocation 钳制）
+	//一字不改地搬进来 —— 两端的位移量必须逐字同源，所以这条函数就是"两端同一份算法"。
+	//它读的三个量在两端各自都有一份：Offset 来自动画通知（同一份资产）、TargetToward 由
+	//AN_LockTargetToward 锁定（客户端那一半见开发计划 3.4 重做的蓝图待办）、Toward 是复制量
+	FVector ComputeMoveOffset(FVector Offset, FVector2D TargetToward) const;
+
+	//把【已经折算并钳制好】的偏移变成一份根运动源交给移动组件（两端同一条路）。
+	//位移因此进了移动系统，三处好处：带碰撞扫描（撞墙不再穿过去）、进 saved move，
+	//以及服务器校正之后的回放会把它恢复回来（FSavedMove_Character::PrepMoveFor 里
+	//CurrentRootMotion = SavedRootMotion）—— 旧实现裸写 AddActorLocalOffset 不属于任何 move，
+	//校正一覆盖就永久没了，那正是"先位移、随即被拽回原点"的机制
+	void ApplyMoveRootMotion(const FVector& MyOffset);
+
 	//改变角色朝向
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeToward(bool TargetToward);
@@ -458,4 +498,9 @@ private:
 	//按 Mask 读出三个锁的当前值并下发（设计 2.8）。服务器的每一处写锁点调用；
 	//Server_Attack_Implementation 末尾那一次覆盖接受与拒绝两条路径（设计 2.6.1）
 	void SendLockCorrection(uint8 LockMask);
+
+	//位移源的施加计数（计划 3.4 重做）。源的名字由 ApplyMoveRootMotion 起，两端的取值必须一致
+	//（FRootMotionSource::Matches 比的就是名字，见那里的注释）；本计数只进日志，用来数"一次按键被
+	//施加了几次"，两端各自从 1 开始、不参与引擎配对
+	int32 MoveSourceSerial = 0;
 };

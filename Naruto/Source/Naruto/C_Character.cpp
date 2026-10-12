@@ -22,6 +22,14 @@
 #include "C_PredictionComponent.h"
 #include "C_AuthorityValueComponent.h"
 
+//位移根的时长（计划 3.4 重做的"位移时长"条）：MoveToForce 是【沿路径插值】的源
+//（MoveFraction = (已走时间 + 本次 tick) / Duration，见 RootMotionSource.cpp:745-751），
+//所以时长必须 >= 一次移动 tick，否则 Lerp 会外插到目标之外 —— 低帧率下那一步就是"冲过头"。
+//移动组件的单步上限是 MaxSimulationTimeStep = 0.05（CharacterMovementComponent.cpp:560 的默认值，
+//引擎自己会把更长的帧切成 <= 0.05 的步），所以 0.05 是"绝不外插"的最小取值：
+//60 fps 下约三帧走完，观感与接入前的裸写位置几乎一样。想更"滑"就调大（0.1~0.2），两端自动一致
+static constexpr float MoveRootMotionDuration = 0.05f;
+
 AC_Character::AC_Character()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -351,11 +359,10 @@ void AC_Character::PredictChangeAttack(int32 attack)
 	}
 }
 
-void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
+FVector AC_Character::ComputeMoveOffset(FVector Offset, FVector2D TargetToward) const
 {
-	//权限语义（设计 5.8 / 2.9）：两端各自执行。AddActorLocalOffset 没有权威检查
-	//（引擎的 MoveComponentImpl 只做移动、不报错），服务器这一半是权威位移；
-	//客户端那一半在 2.7 / 3.4 接上（动画通知内先行 + RecordMoveBaseline），本函数不做端别判定
+	//位移折算与场地钳制（计划 3.4 重做）：原 MakeMove 里那两段逐行搬来，一个字都没改 ——
+	//两端的位移量靠"同一份算法 + 同源的输入量"保证一致（开发计划 3.4 重做"机制总览"那节）
 
 	//根据意图改变方向
 	FVector MyOffset = Offset;
@@ -364,13 +371,147 @@ void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
 	if (!Toward)MyOffset.X = -MyOffset.X;
 
 	//位置限制
-	FVector MyLocation = GetActorLocation();
+	const FVector MyLocation = GetActorLocation();
 	if (MyLocation.X + MyOffset.X > MaxLocation.X)MyOffset.X = MaxLocation.X - MyLocation.X;
 	if (MyLocation.X + MyOffset.X < MinLocation.X)MyOffset.X = MinLocation.X - MyLocation.X;
 	if (MyLocation.Y + MyOffset.Y > MaxLocation.Y)MyOffset.Y = MaxLocation.Y - MyLocation.Y;
 	if (MyLocation.Y + MyOffset.Y < MinLocation.Y)MyOffset.Y = MinLocation.Y - MyLocation.Y;
 
-	AddActorLocalOffset(MyOffset);
+	return MyOffset;
+}
+
+void AC_Character::MakeMove(FVector Offset, FVector2D TargetToward)
+{
+	//权限语义（设计 5.8 / 2.9）：两端各自执行，本函数不做端别判定 —— 权威那一半由蓝图
+	//I_MakeMove 的权威分支调用，拥有者客户端那一半走下面的 PredictMakeMove，
+	//两处最后都落到 ApplyMoveRootMotion，是同一条路。
+	//3.4 重做（2026-10-12）：位移不再裸写位置（旧实现在 git stash@{0}，回退理由见开发计划 3.4 重做）
+	//——根因是位置写在移动组件之外：它不属于任何一次 ServerMove，引擎每段都发一次校正把它拽回原点。
+	//诊断（计划 3.4 重做 W4.1）：非权威端调到这里 = 蓝图 I_MakeMove 的非权威分支还在调 MakeMove
+	//（还没改成 PredictMakeMove）。这条日志出现即那一处没改；位移照常发生，观感可照常验收
+	if (!HasAuthority())
+	{
+		UE_LOG(LogPrediction, Warning, TEXT("MakeMove was called on a non-authority end (%s): the non-authority branch of the blueprint interface I_MakeMove is still calling MakeMove instead of PredictMakeMove, so the Prediction.Move switch does not gate the local displacement"), *GetName());
+	}
+
+	ApplyMoveRootMotion(ComputeMoveOffset(Offset, TargetToward));
+}
+
+void AC_Character::PredictMakeMove(FVector Offset, FVector2D TargetToward)
+{
+	//AN_MakeMove 的客户端那一半（计划 3.4 重做 / 设计 2.9）。
+	//位移不建键、不写标记：它走移动组件（根运动源），不是表内属性 —— 这是它与 3.1 / 3.2 / 3.3 三片
+	//在结构上的唯一区别（那三片都是"本地先行写值 + 写标记"，本片只有"算同一份位移、交给移动组件"）。
+	//四道门：本机控制（远端的模拟代理不预测，那一份看服务器复制的位置）+ 端别（侦听服务器的宿主
+	//既是本机控制又是权威，不预测 —— 逐字同 3.3 的端别闸门）+ 上下文 + 两个开关。
+	//Prediction.Move 关掉 = 客户端一个字都不做，位移只由服务器那一半施加（接入前的样子）
+	if (!IsLocallyControlled())return;
+	if (HasAuthority())return;
+	if (PredictionComponent == nullptr)return;
+	if (!PredictionComponent->CanPredict())return;
+	if (CVarPredictionEnabled.GetValueOnGameThread() == 0)return;
+	if (CVarPredictionMove.GetValueOnGameThread() == 0)return;
+
+	ApplyMoveRootMotion(ComputeMoveOffset(Offset, TargetToward));
+}
+
+void AC_Character::ApplyMoveRootMotion(const FVector& MyOffset)
+{
+	//把折算好的偏移交给移动组件（计划 3.4 重做）。权威那一半与拥有者客户端那一半都从这里出去 ——
+	//"两端同一条路"的落点：位移量与物理过程（带碰撞扫描的移动）因此一致，差别只有时刻（客户端早 RTT/2）
+	if (MyOffset.IsNearlyZero())return;
+
+	UCharacterMovementComponent* MoveComp = GetCharacterMovement();
+	if (MoveComp == nullptr)return;
+
+	//源的身份（裁决 甲，2026-10-12）：两端必须用【同一个】InstanceName —— 引擎认"同一个根运动源"就是比
+	//InstanceName（FRootMotionSource::Matches，RootMotionSource.cpp:231-240：类型 + Priority + AccumulateMode
+	//+ bInLocalSpace + InstanceName + Duration；两端的 Priority 都是基类默认的 0，Duration 是同一个常量）。
+	//名字对不上时，更正支路（ClientAdjustRootMotionSourcePosition_Implementation，
+	//CharacterMovementComponent.cpp:10888-10901：先按 LocalID 映射，再按 Matches 找配对）配不到本地那份源、
+	//把它剔除（CullInvalidSources），然后把 SavedRootMotion 换成一个不含这份位移的组 —— 客户端重放时位移就没了，
+	//只剩根运动留下的那个速度（ApplyMoveRootMotion 之前一版日志里那段 800 cm/s 的来源：
+	//PerformMovement 的 AccumulateOverrideRootMotionVelocity 会把 Velocity 顶成根运动速度）把角色继续推着走，
+	//直到摩擦磨掉或下一条校正把它按回 0 = 延迟下的"额外位移"。
+	//身份取"两端都有的动作状态"：客户端预测写的 Attack / MySkill 与服务器权威写的是同一个值（3.1~3.3 的整套设计
+	//就为这个）。两端万一不一致，引擎只是配不上对、行为退回改名前那一档，安全。
+	//名字只用于日志与引擎配对
+	const AC_PlayerState* MyPS = GetPlayerState<AC_PlayerState>();
+	const int32 StateSkill = (MyPS != nullptr) ? MyPS->MySkill : -1;
+	const int32 StateAttack = (MyPS != nullptr) ? MyPS->Attack : -1;
+	++MoveSourceSerial;
+	const FName SourceName = FName(*FString::Printf(TEXT("Move_%d_%d"), StateSkill, StateAttack));
+
+	//源是朝目标收敛的（RootMotionSource.cpp:752-754 的解算：速度 = 剩余距离 / 本次移动 tick），
+	//所以即使两端的当前坐标差着一点点（引擎容差之内），落点仍然相同
+	TSharedPtr<FRootMotionSource_MoveToForce> Source = MakeShared<FRootMotionSource_MoveToForce>();
+	Source->InstanceName = SourceName;
+	Source->StartLocation = GetActorLocation();
+	Source->TargetLocation = Source->StartLocation + MyOffset;
+	Source->Duration = MoveRootMotionDuration;
+
+	//收尾速度（不能省）：源生效期间累积模式是 Override（RootMotionSource.cpp:666 起的基类默认值），
+	//移动组件的 Velocity 会被换成根运动速度（短时长下是个很大的数）。默认收尾模式是
+	//MaintainLastRootMotionVelocity —— 把它【留着】，位移结束时角色会带着几千 cm/s 滑出去。
+	//3.4 W4.1 第二次实机返工（开发者裁决②，2026-10-12）：这里写【两端共用的常量 0】，不再还回"施加之前"那个速度。
+	//依据是第四次读数的实机证据：服务器侧 16 次施加的收尾速度 16/16 都是 V(0)（出招窗口里 Move() 已挡掉移动输入，
+	//速度本就该是 0），而客户端那一份 17 次里有 9 次带着 45.56 ~ 1020.00 cm/s 的残余 —— 那是"在飞的根运动 /
+	//重放 / 刚收到的校正"污染出来的值。拿它当收尾速度，位移结束之后角色会被这些残余速度继续推着走，
+	//下一条 ServerMove 又把这多出来的一段算成误差 → 校正 → 又一个"额外位移"（第四次读数里那段 552 cm 的行程）。
+	//写成常量而不是"施加前现采一个"，是为了让两端【逐位一致】：两端各自采样的那个值本来就可能不同（客户端早半个 RTT），
+	//而这一处只要两端不同，就会变成一条永久的位置误差
+	Source->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::SetVelocity;
+	Source->FinishVelocityParams.SetVelocity = FVector::ZeroVector;
+
+	MoveComp->ApplyRootMotionSource(Source);
+
+	//诊断（计划 3.4 重做 W4.1 的"额外位移"排查）：把施加【这一刻】的动作状态一并记出来。
+	//一段位移一条日志；同一对 (skill, attack) 在同一段动画里出现两条 = 通知被重跑了一次
+	//（回滚之后动画重进同一状态、或蓝图非权威分支重复调用），是"额外位移"的第一手证据。
+	//serial 是本次进程内第几次施加（两端各自从 1 开始，不参与配对），用来数一次按键被施加了几次
+	UE_LOG(LogPrediction, Verbose, TEXT("MoveRootMotion: %s side %s source %s serial %d offset %s (%s -> %s) velocity kept %s state skill %d attack %d"),
+		*GetName(), HasAuthority() ? TEXT("server") : TEXT("client"), *SourceName.ToString(), MoveSourceSerial,
+		*MyOffset.ToCompactString(), *Source->StartLocation.ToCompactString(), *Source->TargetLocation.ToCompactString(),
+		*Source->FinishVelocityParams.SetVelocity.ToCompactString(), StateSkill, StateAttack);
+}
+
+void AC_Character::MarkActionPredictedByClient()
+{
+	//3.4 W4.1 第二次实机返工（开发者裁决②，2026-10-12）：动作在服务器开起来时置这个闩锁 ——
+	//服务器据此在这个动作窗口（Attack / MySkill 非 0）里关掉移动组件的客户端位置误差校正，见 Tick 的抑制块。
+	//【为什么需要】拥有者客户端那份本地位移（PredictMakeMove）到不了服务器：5.3 的 ServerMove 载荷里
+	//没有任何根运动字段（开发计划 3.4 重做的引擎证据表），所以两端各自施加自己那一份、时刻差半个 RTT。
+	//这段时间差在引擎眼里就是"客户端走错了"，于是每段都发一次校正把它拽回服务器那一格 ——
+	//第四次读数：4 秒里 225 次校正判定，客户端被拽向的落点带着 ± 几百厘米的摆动（-450 ~ +412）。
+	//抑制的是【检查】：引擎开关 bIgnoreClientMovementErrorChecksAndCorrection 全工程只有一处读，
+	//就是 ServerCheckClientError 的第一道闸（CharacterMovementComponent.cpp:9917）—— 服务器保留自己的模拟，
+	//只是不再据此发校正。绝不能用孪生的 bServerAcceptClientAuthoritativePosition（那是"服务器采纳客户端位置"，
+	//服务器自己那条通知会再位移一次 = 位移两倍）
+	//开边条件（与已回退的旧实现有一处差别）：两个开关都开着才置。旧实现的条件是"这条请求带键吗"，
+	//本版不能用它 —— 位移预测不挂键（裁决 61），"Prediction.Move 开 / 动作开关关"那一档下客户端照样本地位移，
+	//而请求因为不建键而没有键，用键当条件会让那一档裸奔；而完全降级档（Enabled 或 Move 关着）必须【不置】：
+	//那里客户端一点本地先行都没有（PredictMakeMove 的四道门），校正通道要原样保留 ——
+	//Prediction.Enabled 0 时客户端那份位移的唯一来源就是这条校正通道（它自己不施加），抑制掉就等于"位移在
+	//自己屏幕上不显示"。这两句就是 3.6 开关独立性里"客户端收到的校正与接入前逐位一致"的落点
+	if (CVarPredictionEnabled.GetValueOnGameThread() == 0)return;
+	if (CVarPredictionMove.GetValueOnGameThread() == 0)return;
+
+	bActionPredictedByClient = true;
+
+	//闩锁与移动组件那个开关必须在【同一次调用】里写（已定事项 55）：收到的一批网络包在同一次收包相位里
+	//连续处理（NetDriver.cpp:1807 的 OnTickDispatch 相位），而 Tick 里那一遍写要等这个相位结束才轮得到 ——
+	//当延迟大于"输入到本段位移帧"的间隔时（实机 200ms 即此档），请求与随后那批【已经带着本地位移】的
+	//ServerMove 落进同一次收包相位，排在请求之后处理的那批 ServerMove 读到的开关还是旧值（假）
+	//→ ServerCheckClientError 照跑 → 把本地位移拽回基线。低延迟下"没事"只是因为那时请求比这批 ServerMove
+	//早得足够远，Tick 里那一遍写赶上了
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		MoveComp->bIgnoreClientMovementErrorChecksAndCorrection = true;
+	}
+
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	UE_LOG(LogPrediction, Verbose, TEXT("MarkActionPredictedByClient: %s (attack %d skill %d)"),
+		*GetName(), PS ? PS->Attack : -1, PS ? PS->MySkill : -1);
 }
 
 void AC_Character::StartPreInput()
@@ -937,6 +1078,12 @@ void AC_Character::Server_Attack_Implementation(FPredictionKey PredictionKey)
 		bAttackInputLock = true;
 		PS->Attack = PS->Attack + 1;
 		MyAttack = PS->Attack;
+
+		//位移预测的校正抑制开边（计划 3.4 W4.1 / 已定事项 53、55、59）：动作窗口在这里被打开（Attack 顶上去），
+		//闩锁与移动组件那个引擎开关就地一起写（为什么不放在函数开头、为什么必须就地写，见那处的注释）。
+		//放在这一支里而不是更早：被吞掉的那一种输入（锁为真、预输入窗口也关着）走不到这里，
+		//它没有对应的本地先行，也不该抑制；技能那一支在 AC_PlayerController::Server_ChangeSkillState_Implementation 的同一处
+		MarkActionPredictedByClient();
 	}
 
 	//接受与否在权威值写完之后回执（设计 2.11.1）：同一 Actor 上的直接调用保序。
@@ -1061,6 +1208,31 @@ void AC_Character::Tick(float DeltaTime)
 	//受击处理
 	if (HasAuthority()) {//服务器控制
 		if (!PS)return;
+
+		//位移预测的校正抑制 —— 合边与兜底（计划 3.4 W4.1 / 已定事项 53、55、59）。
+		//窗口 = 动作窗口（Attack / MySkill 非 0），正是 Move() 那条移动拒绝判据的第一行：这段里角色位置
+		//只有两端的同源写点（位移通知、场地夹取、替身落点），移动输入又已被 Move() 挡掉 ——
+		//服务器没有"客户端只能靠校正才知道"的位移，抑制没有损失。
+		//受击三态（Staggered / Launched / Grabbed）不在此窗口：那里的平推（C_PlayerController.cpp:123）
+		//与击飞（:113 + 本函数下面的浮空循环）是服务器独有的位移，客户端唯一的来源就是这条校正通道，
+		//一并抑制会让被击飞 / 被平推的一方在自己屏幕上不动 —— 所以判据收窄到"自己在出招"。
+		//收窄自带解除：被打断时 PlayerStateReset 先清零 Attack / MySkill，窗口即合，那一下照常到达。
+		//开边在 MarkActionPredictedByClient（带键 / 非带键请求落地的就地写），这里只做两件事：
+		//窗口关闭时清闩锁、以及把闩锁与 Prediction.Move 的当前值同步到引擎开关上（运行中被关开关也走这里）
+		if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+		{
+			if (PS->Attack == 0 && PS->MySkill == 0)bActionPredictedByClient = false;
+
+			const bool bSuppressMoveCorrection = bActionPredictedByClient
+				&& (CVarPredictionMove.GetValueOnGameThread() != 0);
+			if (MoveComp->bIgnoreClientMovementErrorChecksAndCorrection != bSuppressMoveCorrection)
+			{
+				MoveComp->bIgnoreClientMovementErrorChecksAndCorrection = bSuppressMoveCorrection;
+				UE_LOG(LogPrediction, Verbose, TEXT("Move correction suppression: %s -> %d (attack %d skill %d)"),
+					*GetName(), bSuppressMoveCorrection ? 1 : 0, PS->Attack, PS->MySkill);
+			}
+		}
+
 		if (PS->CharacterState == ECharacterStateType::Protected) {
 			if (bInProtectAnim == false) {
 				Mult_ChangeProtectedAnim(true);
