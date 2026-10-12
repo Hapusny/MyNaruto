@@ -31,11 +31,11 @@
   - `I_StartHitCheck`：权威时调用 `ResetSuccessHit`（原为直接将 `SuccsessHit` 置为 `false`；这里写的 `SuccsessHit` 与 `I_HitJump` 读的 `successHit` 是同一个 C++ 属性 `AC_Character::bSuccessHit`，拼写差异是蓝图侧节点显示名，开发者 2026-10-10 核对；全工程写它的只有本行与 `C_Character::OnAttackBoxOverlap`，`I_HitJump` 只读不写。本行已于 2026-10-10 按计划 2.5 改为调用 `ResetSuccessHit`，开发者确认，详见开发计划 2.5）
   - `I_GiveChakra`：调用 `AddChakra`
   - `I_MakeDamage`：用传入的 `Type`、`Effect`、`Value`、`Time`、`State`、`GrabPoint` 作为参数调用 `BeDamaged`
-  - `I_LockTargetToward`：权威时用 `TryTargetToward` 为 `TargetToward` 赋值
+  - `I_LockTargetToward`：权威时用 `TryTargetToward` 为 `TargetToward` 赋值；**客户端那半边尚未确认（2026-10-12，待编辑器确认）**：客户端那份 `TargetToward` 只由权威分支写 ⇒ 本地 `PredictMakeMove` 拿到的是初值（`(0,0)`），而两端各自 `ComputeMoveOffset` 用的就是各自那份 ⇒ 锁定那一刻带上下输入时两端会算出不同的 Y 分量。要补的形状 = 与权威分支同形的一条写（`TargetToward = TryTargetToward`；`TryTargetToward` 是 `UPROPERTY(BlueprintReadWrite)`，客户端那份是本地输入意图，见 `C_Character.cpp` 的 `Move()`）、不判权威。**现有日志测不出**（一轮 33 条位移全无 Y 分量），读数办法见开发计划 3.4 W4.3
   - `I_ChangeAttack`：权威时用传入的 `Attack` 作为参数调用 `ChangeAttack`；**非权威分支调用 `PredictChangeAttack`**（入参 `Attack` 透传。2026-10-11 按计划 3.3 补的客户端那一半，开发者执行 —— 与 `I_ChangeState` / `PredictChangeState` 同形。**不调 `ChangeAttack`**：那一条是权威写者；`PredictChangeAttack` 自带 `IsLocallyControlled()` + `HasAuthority()` 早退两道端别门与本片开关，远端的模拟代理不写、等表）
   - `I_ChangeBox`：本地控制时用传入的 `Size`、`Offset`、`Type` 作为参数调用 `ServerChangeBox`
   - `I_ChangeDamageValue`：权威时用传入的造成伤害相关参数为 `Type`、`Effect`、`Value`、`Time`、`State` 赋值
-  - `I_MakeMove`：权威时用传入的 `Offset` 和本地的 `TargetToward` 调用 `MakeMove`
+  - `I_MakeMove`：权威时用传入的 `Offset` 和本地的 `TargetToward` 调用 `MakeMove`；**非权威分支调用 `PredictMakeMove`**（入参 `Offset` 与本地 `TargetToward` 透传。2026-10-12 按计划 3.4 W4.1 补的客户端那一半，开发者执行 —— 与 `I_ChangeState` / `I_ChangeAttack` 同形。**不调 `MakeMove`**：那一条是权威写者，且非权威端调它会打一条 Warning。**日志佐证（2026-10-12）**：甲落地那一轮 33 条 `MoveRootMotion` 里 17 条来自客户端、非权威端 Warning 0 条 ⇒ 这一处是"换掉"不是"加调"，本项验收完成）
   - `I_StartPreInput`：权威时调用 `StartPreInput`（原为直接 `Set bPreInputLock = false` 与 `TryTargetToward = 0` 两条写；已于 2026-10-09 按计划 2.2 / 已定事项 24 换成调用 C++ 的 `StartPreInput()`，两条写的语义一起挪进了该函数，蓝图侧不再保留，开发者执行）；**非权威分支直接把 `bPreInputLock` 置 `false`**（2026-10-10 按计划 2.7 补的客户端那一半。**不调 `StartPreInput`**——那个函数会连 `TryTargetToward` 一起清零，而它在客户端是本地输入意图，见 `C_Character.cpp` 的 `Move()`）
   - `I_SpawnSE`：权威时根据传入的 `Offset` 和 `SEName` 和本地 `Toward` 调用 `SpawnBPSE`
 

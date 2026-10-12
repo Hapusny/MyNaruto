@@ -903,10 +903,69 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 
 ### 3.4 切片 Move（位移 / 位置）
 
+> **本节已被下面的「3.4 重做（根运动源）」取代**（2026-10-12）。以下三条是最初按设计 2.9 写的要求（"一次性基线 + 一个键一次位移"），保留作历史对照 —— 第一版实现按它做过、又经五~九轮实机返工，最终整体回退。
+
 - **内容**：`AN_MakeMove` 内本地先行 + `RecordMoveBaseline()`（设计 5.8 的 `MakeMove` 一行：明确"两端各自执行"的语义，客户端路径改由动画通知内先行）；技能位移与替身瞬移共用同一机制。
 - **落点**：`MakeMove`（`C_Character.cpp:212-228`）、`AN_MakeMove`（**蓝图**）。
 - **验收**：位移后位置正常；强制拒绝 → 位置回到基线；**连续两段位移分别成键、各自回滚**（一个键只允许一次位移，多段位移应拆成多个键，设计 3.4.3 的 `RecordMoveBaseline` 约定）。
 - **说明**：本切片让"位置预测"独立于技能 / 替身切片存在——3.1 / 3.2 可以先不接位移，出问题时只关这一片。
+
+#### 3.4 重做（2026-10-12 起，路线更换：**根运动源**）
+
+**背景与根因**：3.4 的第一版实现（`AN_MakeMove` 内本地先行 + `RecordMoveBaseline` 基线回滚，以及其后的五~九轮实机返工）**已整体回退**，代码回到 `6c69439`；旧实现与那一批文档留在 `git stash@{0}`（已定事项 53–60 随之作废，其中"动作窗口内抑制校正"这一条后来按新路线回来了 —— ②，代码注释仍引 53 / 55 / 59）。返工无效的根因在**路线**不在某一行：位移写在移动组件之外（`MakeMove` 裸写 `AddActorLocalOffset`），它不属于任何一次 `ServerMove` ⇒ 服务器既不能重演、也不能接受它，引擎按容差 ≈1.73 单位判"客户端走错了" ⇒ **每段必发一次 `ClientAdjustPosition`**；旧路的九个补丁（静音窗口 / 客户端守卫 / 增量撤销）都在给这套对抗调停，彼此又互相咬（静音一盖满动作窗口，本地一旦被撤就再没有力量把它带回服务器的位置）。
+
+**一、裁决 61（现行形状）**：位移交给移动组件 —— **两端各自**在 `AN_MakeMove` 触发时施加自己的 `FRootMotionSource_MoveToForce`（客户端半边 `PredictMakeMove`、服务器半边 `MakeMove`，共用 `ComputeMoveOffset` + `ApplyMoveRootMotion`）。位移**不挂预测键**（键只管动作 / 段号）；`Prediction.Move 0` 只关客户端半边，服务器那一半照旧（= 原版行为），客户端靠引擎校正跟随。**订正**：初稿的"客户端施加、随 `ServerMove` 上报、服务器重放"**错**（5.3 的上报载荷里没有任何根运动字段，`FCharacterNetworkMoveData`）；连带的"零校正"也改读为**终点一致**（名义位置差 ≈ 0），真正的保障是校正**不再抹掉**位移（本地重放时 `PrepMoveFor` 把源取回）。裁决 62（被拒段回退）**已作废**，见第六节。
+
+**二、机制总览**
+
+| 端 | 时机 | 动作 |
+| --- | --- | --- |
+| 客户端 | `AN_MakeMove` → 蓝图 `I_MakeMove` 非权威分支 → `PredictMakeMove` | 折算 + 场地钳制（`ComputeMoveOffset`）→ 施加 `MoveToForce{ Start = 当前位置, Target = Start + 钳制后偏移, Duration }`，源名 `Move_<PS->MySkill>_<PS->Attack>`（**两端必须同名**，裁决甲） |
+| 客户端 | 每帧 | 移动组件自己推进这份源（与走路同一套物理，带碰撞扫描 —— 撞墙不再穿过去） |
+| 服务器 | `AN_MakeMove` 的权威半边 → `MakeMove` | **也施加一份**（同一条 `ComputeMoveOffset` + `ApplyMoveRootMotion`，与客户端逐行同一套代码）。**不得跳过**：客户端那份到不了服务器，跳了服务器角色根本不动、对手屏幕上看不到这次冲刺（第一版计划里的"锁存 / 跳过"已撤销） |
+| 服务器 | 收到 `ServerMove` | 只当普通移动处理 —— 载荷里没有根运动，没有"重放客户端的源"这回事 |
+
+**三、引擎证据**（对 `D:\UE_5.3` 核过，只留仍然承重的几条）
+
+| 事实 | 位置 |
+| --- | --- |
+| **客户端 → 服务器方向没有任何根运动字段** ⇒ 客户端施的源到不了服务器 | `FCharacterNetworkMoveData`（`CharacterMovementReplication.h:93-145`）逐字段 + `Serialize`（`CharacterMovementComponent.cpp:9280`） |
+| 根运动的更正报文是**服务器 → 客户端**方向（`NetSerialize(…, 3)` → `ClientAdjustRootMotionSourcePosition`） | `CharacterMovementComponent.cpp:10300-10302`、`:10804`；`:10892 bClientResimulateRootMotionSources` |
+| 引擎认"同一个源"靠 `FRootMotionSource::Matches()`：类型 + Priority + AccumulateMode + bInLocalSpace + **`InstanceName`** + Duration（`StartTime` 不参与） | `RootMotionSource.cpp:231-240` |
+| 配不上对 ⇒ 校正把本地那份源**剔除**（`CullInvalidSources`）再替换 `SavedRootMotion`；配上对 ⇒ **直接采纳服务器那份**（绝对坐标，`bRestrictSpeedToExpected = false` 时被拽着跑） | `CharacterMovementComponent.cpp:10888-10901` |
+| 本地重放会把源取回 ⇒ 校正**不再抹掉**位移（旧路裸写位置是永久丢失） | `ACharacter::SavedRootMotion`（`Character.h:949-959`）+ `FSavedMove_Character::PrepMoveFor`（`:12493-12547`） |
+| 源是"朝目标收敛"的（两端起点有小差也落到同一终点） | `RootMotionSource.cpp:752-754` |
+| 位置容差 ≈ √3 单位，而 800 cm/s 下一帧就走 8 cm ⇒ 两端错开一帧即越界（"每帧一次校正 + 整段重放"的放大器） | `MAXPOSITIONERRORSQUARED`（`GameNetworkManager.cpp:27 / :166`） |
+| `ServerMovePacked_Implementation` **不是虚函数** ⇒ 没有"应用前"的挂钩（曾用来否掉乙-a；订正后与它无关） | `Character.h:272` |
+
+**四、排查与两次定案**
+
+- **甲｜两端同名**：第一轮症状 = 延迟下"额外位移" 22.61 cm。链路：两端源名不同（`Move_<键ID>` vs `Move_x_<序号>`）⇒ `Matches()` 配不上对 ⇒ 校正把客户端那份源**剔除**、`SavedRootMotion` 换成空组；位移没了而 `Velocity` 仍被根运动顶着 ⇒ 角色以 800 cm/s 继续走（摩擦磨掉 ≈22 cm）。**修法** = 两端同用 `Move_<PS->MySkill>_<PS->Attack>`（客户端预测写的 `Attack` / `MySkill` 与服务器权威写的是同一个值 —— 3.1~3.3 整套设计为此），改名后 `Matches()` 要比的六项在两端全部相等。**改名之后症状换了一个**：校正改走"采纳服务器那份源"⇒ 客户端被拽向**服务器世界坐标的绝对值**（±几百 cm、含负速度）。两个症状同源：**客户端那份位移服务器不知道**。
+- **② 抑制 + 尾速归零**（现行）：动作窗口内打开引擎开关 `bIgnoreClientMovementErrorChecksAndCorrection` —— 全工程唯一读点是 `ServerCheckClientError` 开头（`CharacterMovementComponent.cpp:9917`），**只跳过检查，服务器保留自己的模拟**（绝不用孪生的 `bServerAcceptClientAuthoritativePosition`：那是"服务器采纳客户端位置"，服务器自己那条通知会再位移一次 = 位移两倍）；外加收尾速度写**两端共用的常量 0**（`FinishVelocityParams.SetVelocity`，写常量而非"施加前现采一个"是为了两端逐位一致）。**开边** = `MarkActionPredictedByClient()`：服务器在动作**被请求开起来的那一次就地**写（收到的一批包在同一次收包相位里连续处理，Tick 里那一遍写插不进那个相位）；条件 = `Prediction.Enabled && Prediction.Move`（**不是**旧实现的"带键"——本版位移不挂键）。**合边** = Tick 的服务器块（`Attack == 0 && MySkill == 0`）。**窗口只收"自己在出招"**：受击三态（`Staggered` / `Launched` / `Grabbed`）的平推 / 击飞是服务器独有位移、客户端唯一来源就是这条校正通道，一并抑制会让被击飞的一方在自己屏幕上不动。
+- **未取的候选（留档）**：① 上报源（`SetNetworkMoveDataContainer` + 自定义 `FCharacterNetworkMoveData`，引擎正路、收益最大，接口表 3.7 不用动，工作量中等）；乙 放大 `MAXPOSITIONERRORSQUARED`（全局放宽容差）；丙 不预测位移（`Prediction.Move 0`）；④ 回退旧路线（九轮返工已证那条路是在跟引擎对着干）。
+
+**五、W4.1 落地（现行实现，2026-10-12，编译 0 警告 / 0 错误）**
+
+- **代码**（4 个文件，全落在既有函数与私有成员上，**接口表 3.7 未动**）：`ComputeMoveOffset(Offset, TargetToward)`（原 `MakeMove` 的折算 + 场地钳制两段逐行搬来，一个字没改）；`MakeMove` 改为"折算 + 钳制 → `ApplyMoveRootMotion`"，另加一条非权威端 Warning（蓝图那一处没改的哨兵）；`PredictMakeMove(Offset, TargetToward)`（`BlueprintCallable`，**六道早退**：`IsLocallyControlled()` / `HasAuthority()` / 组件非空 / `CanPredict()` / `Prediction.Enabled` / `Prediction.Move` —— 前两道与 3.3 的端别闸门同形，宿主不预测）；`ApplyMoveRootMotion`（起名 + 施加 + 一条 `MoveRootMotion: … side … source … serial … offset … velocity kept … state skill/attack` 诊断日志）；私有 `MoveSourceSerial`（只进日志，不参与起名）；`C_PredictionComponent` 加 `Prediction.Move`（默认 1）。
+- **两条实现决定**：`MoveRootMotionDuration = 0.05f`（= `MaxSimulationTimeStep` ⇒ 一次移动步进内路径分数不会超过 1、不对目标外插；观感与旧 `AddActorLocalOffset` 同档，1~2 帧走完。想更"滑"就调大，两端自动一致）；收尾速度 `SetVelocity` = **常量 0**（`MaintainLastRootMotionVelocity` 会留下几千 cm/s 的滑行）。
+- **蓝图两处**：① `I_MakeMove` 非权威分支 → `PredictMakeMove`（入参 `Offset` / 本地 `TargetToward` 透传）—— **日志证据确认已改**（甲落地那一轮 33 条 `MoveRootMotion` 里 17 条 `side client`，而非权威端那条 Warning 全日志 0 条 ⇒ 是"换掉"不是"加调"）。② `I_LockTargetToward` 客户端半边 **待编辑器确认**：客户端那份 `TargetToward` 只由权威分支写 ⇒ 本地 `PredictMakeMove` 拿到的是初值，而两端各自 `ComputeMoveOffset` 用的就是各自那份（`TargetToward.Y` 决定 Y 分量与翻转）⇒ 锁定那一刻带上下输入时两端会算出不同的位移量。**要补的形状** = 与权威分支同形的一条写（`TargetToward = TryTargetToward`，后者是 `UPROPERTY(BlueprintReadWrite)`）、不判权威。**读数办法**：锁定那一刻带一次上下输入，比两端**同名源**的 `offset` 是否逐位相同 —— 现有日志 33 条位移全无 Y 分量，测不出。
+- **判据 ①~⑦**（`PktLag=0 / 200` 各压一轮；甲那一轮的基数是后面括号里的数）：① `MarkActionPredictedByClient: … (attack N skill M)` 与 `Move correction suppression: … -> 1` 同一帧内出现、窗口关闭时 `-> 0`；② 动作窗口内 `*** Client / Server: Error` 停止（4 秒 177 / 48 条）；③ 客户端 `MoveRootMotion` 的 `velocity kept` 全是 V(0)（17 条里 9 条非零：45.56 ~ 1020.00）；④ `ClientVel` 不再出现负值（−765 / −479），两次通知之间的落点摆动收回一个偏移量级；⑤ 窗口关闭那一下的校正幅度 = 两台机器剩下的净差，不是"把整段连招拽回去"；⑥ 出招中挨打的平推 / 击飞在自己屏幕上照旧；⑦ `Prediction.Move 0` 逐位回到原版（客户端不施加源、抑制线一条不出 ⇒ 关掉时与接入前逐位一致，落点 = `PredictMakeMove` 的两道开关门 + `MarkActionPredictedByClient` 的同两道早退与 Tick 同步）。
+
+**六、W4.2 撤销（2026-10-12 开发者裁决：位移预测完全不做拒绝处理）**
+
+两版实现先后落地（乙-g：客户端反向源 `Move_Undo_<键ID>` + 记账 + 容差；乙-a：服务器那条命令不施加自己的源；只留前哨：`BindMoveSegmentToKey` 本段键登记 + "被拒段不位移"）、编译都是 0 警告 / 0 错误，实机反馈"还是有问题" ⇒ 裁决**被拒那一下的位移不挡、不撤、不记**，交给引擎的位置校正兜底。⇒ **位移预测的验收代码 = W4.1（甲 + ②）**，本条不再推进。**底气**：`Rejected` 的每一条来源在服务器侧**一个字段都没写**（普攻三个出口 / 技能五个出口 / 替身四个出口 / `Prediction.ForceReject`）⇒ 被拒的那一次输入在服务器上根本没发生过（唯一例外 = 超时兜底，只由 `Prediction.DropResolve` 复现）。撤销后 `BindMoveSegmentToKey` / `LocalMoveKeyID` / `MoveRefused` 在整个模块（24 个 `.cpp`/`.h`）grep 计数 0，工作区行数 1370 / 506 / 1579。
+
+**七、W4.3 收尾（2026-10-12）**
+
+代码侧扫尾（W4.2 记号 0 残留；8 处 W4.1 注释逐条读过、无悬空）、蓝图两处定案（见第五节）、判据 ①~⑦ 定稿、`Prediction.Move 0` 的代码侧核对；**实机那两项待跑**：两档延迟下的判据清单 + 蓝图②的上下输入读数。**下一步**：实机那两项（两档延迟下的判据清单、蓝图②的上下输入读数，本轮未跑）；随后 3.5 命中盒（Box）、3.6 联验。（`AICollaborativeNotes.md` §3.21 已成文，含低效率复盘）
+
+**八、遗留与待确认**
+
+- **设计 2.9 的机制描述**（"属性预测 + 一次性基线"）被本路线取代；**接口表 3.7 不动**，设计原文未改，等开发者点头。
+- **`RecordMoveBaseline` / `MoveBaseline`**：组件里保留（3.7 冻结），仍由 3.2 的替身瞬移使用；本路线不再用（将来若把替身瞬移也改成 `MoveToForce`，可彻底不依赖，不在本包范围）。
+- **被拒 / 超时那一档**：客户端会多走一段位移，等引擎位置校正抹平（对手屏幕上是复制位置，不受影响）；被拒之后能立刻再按；300 ms 下连段末尾那一下瞬移开发者已接受。
+- **两条待编辑器确认**：① 客户端比服务器**多施加一份 40 偏移**（甲那一轮 `Move_0_2`，起点 `-649.84`，服务器无对应条目）—— 候选是"蓝图动画状态机两端跳法不同"或"客户端多跑了一次同一通知"；② **段交界处两端源名错开一条**（客户端还停在上一段：`Move_0_1` vs `Move_0_2`，甲那一轮三条里占两条）。
+- **被拒率**：本轮不做"只预测服务器已确认的段"那类闸门（旧路的分支 B）；若实机发现被拒频繁、滑回来太扎眼，再加闸门。
 
 ### 3.5 切片 Box（碰撞框本地先行，设计 5.9b）
 
@@ -1006,6 +1065,8 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 50 | 设计 3.2"服务器不先行"在**侦听服务器的宿主**上靠什么保证：`CanPredict()` 不判端别（组件注释写明"端别判断在调用方入口函数里做"），而 3.1／3.2／3.3 的接入点只看 `IsLocallyControlled()`，宿主那句同时为真 | **六处接入点补 `&& !HasAuthority()`**（2026-10-11，3.3 实机返工）：`Attack` `:435-436`、`Escape` `:503-504`、技能五处 `:570` / `:624` / `:665` / `:713` / `:756`。症状：宿主普攻时，本地先行刚写的锁被**同栈内联执行**的 `Server_Attack` 看见 → `bThisInputCounts == false` → 当场 `Rejected` → 本地段号被回滚、锁卡死，**开启普攻预测后宿主无法普攻**。修法方向与组件契约一致（端别由调用方判），宿主不走本地先行、只走权威路径 = 与接入前逐位一致。**同一根因的第二处**：宿主替身经 `Escape` 本地先行瞬移后，属于自己的 `Server_Escape` 又在同栈按**已瞬移过的位置**重算落点再瞬移一次（**连瞬两次**），同一道闸门一并修掉。**不改设计措辞**（3.2 的目标不变），也不改 `CanPredict()`（它的"不判端别"是契约的一部分）。本条的适用范围不限 3.3：后续切片（3.4 位移、3.5 碰撞框）新接入的预测点同样要在调用方补端别闸门 | 3.2 / 3.3 / 2.4.4 / 3.4 |
 | 51 | 客户端那份 `bAttackInputLock` 的**解除**写在哪 —— 设计 2.6 / 2.6.1 只给了"锁在客户端输入瞬间即置位 / 复位"与更正通道，而 3.3 的输入点闸门读的正是这份值 | **两条通道，缺一不可**（2026-10-11，3.3 第二次实机返工）：**①更正补发**（2.5 通道，服务器写锁时下发 `Client_CorrectLocks`）——覆盖的是**服务器独有**的写点（`PlayerStateReset` 的 `bit0`、`OnAttackBoxOverlap` 的 `bit2`）；**②同类通知客户端半边的本地写** —— 覆盖的是**两端各自都会跑到的通知**：`bPreInputLock` 在 `AN_PreInput`（`I_StartPreInput` 非权威分支直接置假，2.7 已落）、`bAttackInputLock` 在 `AN_ChangeAttack` 的推进点（`PredictChangeAttack` 的两支：收招、窗口没被消费，第二次返工补）。**判据**：服务器会在某条**两端各自都有的通知**里写某个锁 → 客户端就在同一条通知的客户端半边写同一份；只有服务器才跑得到的写入路径 → 只走更正。**只走更正**的代价是本地这份值要晚 RTT/2 才对，输入点闸门会与服务器异源（`Attack()` 的闸门 1 读它）——实机表现就是 3.3 的两条返工反馈（低延迟高频输入时服务器进连段、客户端不出现；高延迟时预输入窗口前的按键把客户端推进下一段）。**注意这**不是**让客户端去"预测"服务器的锁写**：写入点两端同源、值是同一个布尔，本地先落只是把"δ 后到达"变成"δ 提前生效"，与接入前的取值流逐位一致 | 2.6 / 2.6.1 / 5.8 / 3.3 |
 | 52 | `Client_CorrectLocks` 的更正要不要覆盖 `bPreInputLock`（bit1）—— 设计 2.8 说"服务器每一处写锁的位置都必须下发"，而 `Server_Attack` 在函数开头无条件把 `bPreInputLock` 置真 | **不覆盖**（2026-10-11，3.3 第二次返工的第 2 条修订）：`Server_Attack` 三个出口的掩码改为**只含 bit0**（`LockBitsAttackRequest = LockBitAttackInputLock`），bit1 从此没有任何调用点发它。**理由**：3.3 起客户端那份 `bPreInputLock` 两半都有**同源写者**（输入点 `Attack()` 置真、自己那条 `AN_PreInput` 置假，后者 2.7 起就有），而这条更正带的是"服务器处理这次请求那一刻"的快照 —— `bPreInputLock` 在 `:912` 被无条件置真，所以**每一条普攻请求都会给客户端回送一个恒为真的旧值**。它晚到（δ ≈ 一个 RTT）之后会把客户端已经由 `AN_PreInput` 正确置假的那一份改回真，本机推进点 `PredictChangeAttack` 是拿这个值判"窗口有没有被消费"的 → **客户端在 `AN_ChangeAttack` 自己进了下一段，而服务器什么都没做**（实机症状就是"客户端在动画预输入之前进行的输入也会导致客户端进入下一连段"，延迟越高越容易：`PktLag=0` 时回声落在 `AN_PreInput` 之前、被正常洗掉）。**设计 2.8 那句"每一处写锁的位置都必须下发"是按"客户端没有同源写者"写的**，3.3 之后对 `bPreInputLock` 不成立（设计不改，订正记在计划 3.3 与已定事项 33 的注里）。**bit0 保留**：`bAttackInputLock` 的更正覆盖的是服务器独有的写点（`PlayerStateReset` 的受击打断复位），且与客户端同源写者同值 | 2.8 / 2.6.1 / 3.3 / 51 |
+| 61 | 3.4 位移预测走哪条路线（2026-10-12；第一版实现经五~九轮实机返工无效，整体回退到 `6c69439`，实现留 `git stash@{0}`） | **根运动源**：**两端各自**在 `AN_MakeMove` 触发时对移动组件施加 `FRootMotionSource_MoveToForce`（客户端半边 = `PredictMakeMove`，服务器半边 = `MakeMove`，共用 `ComputeMoveOffset` + `ApplyMoveRootMotion`）。位移因此**不再挂预测键**（键只管动作/段号）；`Prediction.Move 0` 只关客户端半边、服务器那一半照旧（= 原版行为），客户端靠引擎校正跟随。**根因**：旧路把位移裸写在移动组件之外（`AddActorLocalOffset`），不属于任何 `ServerMove` ⇒ 服务器既不能重演也不能接受它，引擎每段必发一次 `ClientAdjustPosition` 拽回。**同日订正**：本条初稿写的是"客户端施加、随 `ServerMove` 上报、服务器重放" —— **错**（5.3 的上报载荷里没有根运动字段，`FCharacterNetworkMoveData`），已按"两端各自施加"落地，订正过程见 3.4 重做第四节的"订正"段。**"零校正"也随之改读**：收益是终点一致（名义位置差 ≈ 0）而非零校正报文；真正的保障是校正**不再抹掉**位移（重放时 `PrepMoveFor` 把源取回） | 3.4 |
+| 62 | 被拒的段，那段位移怎么处理 | **本行整体作废（2026-10-12 开发者裁决）**：位移预测**完全不做拒绝处理** —— 被拒那一下的位移不挡、不撤、不记，交给引擎的位置校正兜底。依据：`Rejected` 的每一条来源在服务器侧一个字段都没写，那次输入在服务器上根本没发生过。初稿的乙-g（客户端反向源）/ 乙-a 两条路径随之作废，留档与撤销过程见 3.4 重做的"W4.2 撤销"；**位移预测的验收代码 = W4.1（甲 + ②）** | 3.4 |
 
 ---
 
@@ -1022,3 +1083,5 @@ LAN 上 RTT 约一帧，"本地先行 → 被拒绝 → 回滚"这条路径靠�
 | 更正覆盖"已有同源写者"的锁（**3.3 第二次返工的第 2 条**） | `bPreInputLock` 被回声（发送时刻旧快照）改回真 → 客户端在推进点自己进下一段（延迟越高越易） | 掩码只声明服务器独有的写点：`Server_Attack` 那条回路只发 bit0（已定事项 52）；复验看 `Client_CorrectLocks` 日志的 `mask` 恒为 `1` |
 | 超时兜底失效 | 标记残留、本地值永久偏离 | `DropResolve` 验证 2.0s 回滚 |
 | 结构改动与预测行为混在一笔提交 | 无法回退、无法定位 | 每个工作包 / 切片单独提交（第 0 节的"开关能退什么"表） |
+| 位移改走根运动源（**3.4 重做**，已定事项 61） | 位移预测：两端位置一致 | 位移不再裸写位置，改由移动组件施加 `FRootMotionSource_MoveToForce`（**两端各自施加**，客户端 `PredictMakeMove` / 服务器 `MakeMove` 共用同一套折算 + 钳制）；**回退 = 删 `PredictMakeMove` + `MakeMove` 改回裸写 + 蓝图那一处改回 `MakeMove`**（旧路实现在 `stash@{0}`，不删）。`Prediction.Move 0` 是逐片开关（只关客户端半边） |
+| 被拒段的位移撤销（**3.4 重做**，已定事项 62） | ——（**作废**，2026-10-12） | 开发者裁决不做拒绝处理：被拒段的位移不再挡 / 撤 / 记，交给引擎位置校正兜底（见 3.4 重做的"W4.2 撤销"） |
