@@ -62,7 +62,9 @@ TAutoConsoleVariable<int32> CVarPredictionAttack(
 
 // 这一片是"位移"（Move）：落点 = AN_MakeMove 的【客户端那一半】入口 AC_Character::PredictMakeMove
 // （计划 3.4 重做）。与前三片的根本差别：位移【不建键、不写标记】—— 它走移动组件（根运动源），
-// 不是表内属性，所以本开关不进任何判定表，只在接入点读一次。
+// 不是表内属性，所以本开关不进任何判定表，只在接入点读；3.6 起服务器侧的校正抑制也读它（共三处）。
+// 服务器那两处（MarkActionPredictedByClient 的闩锁、Tick 的同步抑制）读的是同一个值：
+// 关掉它 = 客户端不施加位移、闩锁不置、Tick 把引擎开关压回假 —— 三件事属于同一切片。
 // 关掉它 = 客户端不做本地先行：位移只由服务器那一半施加，客户端照接入前那样靠引擎校正跟随 ——
 // 这正是"两端同值"要验的那一档（计划 3.4 重做的验收）。
 // 注意它【不是】位移机制的开关：服务器那一半无论本开关取值都照常施加（权威位移必须发生，
@@ -71,6 +73,18 @@ TAutoConsoleVariable<int32> CVarPredictionMove(
 	TEXT("Prediction.Move"),
 	1,
 	TEXT("Move slice (plan 3.4 redo). 0 = off: the owning client does not predict the displacement (AN_MakeMove's client half is skipped) and follows the server through the engine's correction channel as before."),
+	ECVF_Default);
+
+// 这一片是"碰撞框"（Box，计划 3.5 / 设计 5.9b）：落点 = 两个框的每一个写入点
+// （蓝图 I_ChangeBox 通知 + C++ 的九处，全走 AC_Character::RequestChangeBox / ClearBox）+ Tick 的派生。
+// 与前三片 / 3.4 的根本差别：它【与预测键完全无关】—— 框的尺寸 / 偏移 / 翻转不参与预测、
+// 不进权威值表、不建键、不写标记（设计 5.9b），所以本开关只为"逐片独立降级"存在。
+// 关掉它 = 逐字回到接入前：几何的唯一下发路径是"本地控制端 Server_ChangeBox RPC → 服务器
+// Mult_ChangeBoxSize 多播给所有人"，Tick 的派生整段不做（否则会与老路打架）
+TAutoConsoleVariable<int32> CVarPredictionBox(
+	TEXT("Prediction.Box"),
+	1,
+	TEXT("Box slice (plan 3.5). 0 = off: box geometry goes back to the original path only (Server_ChangeBox RPC -> Mult_ChangeBoxSize multicast) and the per-frame derivation in Tick is skipped."),
 	ECVF_Default);
 
 // Prediction.Log 1 → LogPrediction 抬到 Verbose：建键 / 冻结 / 结算 / 回滚与采用规则命中行都记在 Verbose 上。
@@ -848,12 +862,13 @@ void UC_PredictionComponent::DrawPredictionDebug() const
 		Bound(SelfCharacter.Get()), Bound(SelfPlayerState.Get()), Bound(SelfController.Get()),
 		Bound(SelfPSAuthority.Get()), Bound(SelfCharacterAuthority.Get()), Bound(EnemyPSAuthority.Get())));
 
-	// 二、键表 / 记录表 / 缓冲池：阶段二全程应恒为"active=0 keys=0 records=0 pending=0"
+	// 二、键表 / 记录表 / 缓冲池：阶段二（未接入）恒为 active=0 keys=0 records=0 pending=0；
+	// 3.1 起键与记录是常态，这里只是读数
 	DrawLine(FColor::White, FString::Printf(
 		TEXT("  keys: active=%u keys=%d records=%d pending=%d timeout=%.1fs"),
 		ActivePredictionKeyID, PredictionKeys.Num(), PredictionRecords.Num(), PendingKeys.Num(), PredictionTimeout));
 
-	// 三、预测标记表（设计 3.3 / 2.7.2）：阶段二应恒为 (none)
+	// 三、预测标记表（设计 3.3 / 2.7.2）：阶段二（未接入）恒为 (none)；3.1 起有标记是常态，空表才要留意
 	if (PredictionMarkers.Num() == 0)
 	{
 		DrawLine(FColor::Silver, TEXT("  markers: (none)"));
@@ -1477,7 +1492,8 @@ void UC_PredictionComponent::FinishPredictionKey(uint32 KeyID, bool bConfirmed)
 
 // ---- 调试命令（计划 2.3 / 2.5 / 2.6 的验收工具）----
 // 用途：绕过客户端的本地先行判定，直接向服务器发一次请求，用来在"不可行时机"制造请求，
-// 验证 2.3 搬进服务器的那些判据会拒绝、且不写值（此刻还没有预测键，拒绝表现为"世界状态不变"）。
+// 验证 2.3 搬进服务器的那些判据会拒绝、且不写值。本命令不带键（阶段二时全系统还没有键），
+// 拒绝就表现为"世界状态不变"—— 这一档至今仍靠本命令复现。
 // Prediction.DebugLock 是 2.5 的验收工具：本地直接写锁，模拟第 3 阶段的"本地先行置位"，
 // 用来验证服务器的锁更正会把它覆盖回去。
 // Prediction.DebugKeyedSkill 是 2.6 的验收工具：本地临时构造一个键随技能请求发出去，
@@ -1539,7 +1555,7 @@ namespace
 	}
 
 	//本地直接写三个锁（计划 2.5 的验收工具）：只改本地那一份，不发服务器。
-	//客户端要到第 3 阶段才会在输入瞬间本地置位（设计 2.6.1），在那之前用它制造
+	//客户端第 3 阶段起已在输入瞬间本地置位（设计 2.6.1 / 计划 3.3），本命令仍用来制造
 	//"客户端本地值 ≠ 服务器值"，服务器的锁更正（含 Server_Attack 拒绝路径的补发）必须把本地值拉回权威值
 	void DebugSetLocks(const TArray<FString>& Args, UWorld* World)
 	{

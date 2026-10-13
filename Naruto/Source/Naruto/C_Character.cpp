@@ -8,6 +8,7 @@
 #include "InputActionValue.h"
 #include "Net/UnrealNetwork.h"
 #include "PaperFlipbookComponent.h"
+#include "PaperFlipbook.h"
 #include "PaperSpriteComponent.h"
 #include "PaperZDAnimationComponent.h"
 #include "PaperZDAnimInstance.h"
@@ -94,6 +95,24 @@ void AC_Character::BeginPlay()
 	{
 		PredictionComponent->InitializePredictionContext();
 	}
+
+	//碰撞框切片（计划 3.5 / 设计 5.9b）：把两个框的【授权初值】捕进"通知几何"。
+	//受击框在构造函数里就是 QueryOnly、尺寸与偏移由蓝图配好（正常玩法下没人会在开局写它），
+	//所以它的初值从组件上取 —— 等价于接入前"没人动过它"的样子，派生出来的碰撞启用也与它一致。
+	//攻击框反过来：构造函数里是 NoCollision、由通知来开。如果在这里也把蓝图那份尺寸取进来，
+	//派生会按"尺寸非零 → QueryOnly"在开局就把它打开 —— 站在那儿的角色凭这一份静止的框就能打人。
+	//所以攻击框的尺寸初值固定为零（等价于接入前"要等第一条 AN_ChangeAttackBox 通知才生效"），
+	//它的偏移初值仍然从组件上取（尺寸为零时偏移无意义，取组件值只是为了不引入一次无谓的写入）
+	if (PlayerBox)
+	{
+		NotifiedPlayerBoxSize = PlayerBox->GetUnscaledBoxExtent();
+		NotifiedPlayerBoxOffset = PlayerBox->GetRelativeLocation();
+	}
+	NotifiedAttackBoxSize = FVector::ZeroVector;
+	if (AttackBox)
+	{
+		NotifiedAttackBoxOffset = AttackBox->GetRelativeLocation();
+	}
 }
 
 void AC_Character::OnRep_PlayerState()
@@ -123,8 +142,9 @@ void AC_Character::OnTeamChanged()
 void AC_Character::MyInitialize(ETeamType team)
 {
 	//根据队伍信息设置朝向和位置标记
-	//本函数是在客户端上跑的（OnRep_PlayerState / OnTeamChanged），朝向必须走 RPC 交给服务器改、
-	//再经 Toward 复制回来：原来直调 Server_ChangeToward_Implementation 只会改本地那一份（设计 5.8）
+	//本函数两端都会跑（客户端在 OnRep_PlayerState / OnTeamChanged 里、服务器在 SpawnPawnToPlayer 里）；
+	//客户端那一侧的朝向必须走 RPC 交给服务器改、再经 Toward 复制回来：
+	//原来直调 Server_ChangeToward_Implementation 只会改本地那一份（设计 5.8）
 	if (team == ETeamType::Red) {
 		if(Toward)Server_ChangeToward(false);
 		PlaceMark->SetSpriteColor(FColor::Red);
@@ -191,6 +211,25 @@ void AC_Character::Mult_ChangeBoxSize_Implementation(FVector Size, FVector Offse
 
 	//更改碰撞体大小
 	TargetBox->SetBoxExtent(TargetSize);
+
+	//碰撞框切片（计划 3.5 / 设计 5.9b）：这条路（`Server_ChangeBox` RPC -> 本函数）是【降级路径】——
+	//Prediction.Box 打开时它没有调用点：蓝图 `I_ChangeBox` 已改为无条件调 `RequestChangeBox`
+	//（以 BlueprintSideCallSiteInventory.md 为准，编辑器侧的最终确认见该文档的"待编辑器确认"）。
+	//万一还有旧路径走到这里，就把"通知几何"
+	//一并更新，让 Tick 里那一遍派生与它同值、不打架；否则派生会每帧把刚写的框拽回旧值（攻击框表现为全灭）。
+	//存进去的是【通知原值】而不是上面那道闸门之后的 `TargetSize`：闸门由派生自己按同一个 PS->CharacterState
+	//重算（归零会直接写进"通知几何"，离开受击态不会自己回来 —— 与接入前一致）。
+	//开关关掉时这几行只是几个成员写入：派生整段不做、没有任何读数者，组件那三次写入与接入前逐位相同
+	if (Box == 0)
+	{
+		NotifiedPlayerBoxSize = Size;
+		NotifiedPlayerBoxOffset = Offset;
+	}
+	else
+	{
+		NotifiedAttackBoxSize = Size;
+		NotifiedAttackBoxOffset = Offset;
+	}
 }
 
 void AC_Character::AddChakra()
@@ -214,6 +253,135 @@ void AC_Character::Server_ChangeBox_Implementation(FVector Size, FVector Offset,
 
 	//同步更改服务器和客户端的碰撞体
 	Mult_ChangeBoxSize(Size,Offset, Box);
+}
+
+//---- 碰撞框切片（计划 3.5 / 设计 5.9b）----
+
+void AC_Character::RequestChangeBox(FVector Size, FVector Offset, int32 Box)
+{
+	//统一入口（全工程每一处框的写入都从这里走：蓝图 I_ChangeBox + C++ 的九个调用点）。
+	//开关打开时【两端各自就地应用】：通知在哪一端跑，哪一端当场改自己那一份几何 ——
+	//拥有者本地因此不再等一个 RTT（接入前：拥有者的几何要等自己发的 RPC 到服务器、
+	//服务器再 Mult_ChangeBoxSize 播回来），服务器那一份命中几何也改由服务器自己的动画
+	//通知驱动（它本来就该是权威的那一份）
+	if (CVarPredictionBox.GetValueOnGameThread() != 0)
+	{
+		ApplyChangeBoxLocal(Size, Offset, Box);
+		return;
+	}
+
+	//开关关掉 = 逐字等于接入前：只有本地控制端执行（原蓝图 I_ChangeBox 的"本地控制时"门），
+	//经 Server_ChangeBox RPC 交给服务器、再由 Mult_ChangeBoxSize 播给所有人
+	if (!IsLocallyControlled())return;
+	Server_ChangeBox(Size, Offset, Box);
+}
+
+void AC_Character::ClearBox(int32 Box)
+{
+	//把某个框关掉（尺寸归零 = 无碰撞）。四处服务器侧调用点共用（受击打断 / 替身落点 /
+	//起身保护 / 技能输入的服务器半边）。开关打开时与 RequestChangeBox 同路（就地应用）；
+	//关掉时逐字等于接入前 —— 这些调用点本来就在服务器上，接入前走的是
+	//Server_ChangeBox_Implementation 本身（服务器就地应用 + 多播），不是客户端的 RPC
+	if (CVarPredictionBox.GetValueOnGameThread() != 0)
+	{
+		ApplyChangeBoxLocal(FVector::ZeroVector, FVector::ZeroVector, Box);
+		return;
+	}
+
+	Server_ChangeBox_Implementation(FVector::ZeroVector, FVector::ZeroVector, Box);
+}
+
+void AC_Character::ApplyChangeBoxLocal(FVector Size, FVector Offset, int32 Box)
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS == nullptr)return;
+
+	//保护状态受击框的写入整体丢弃（逐字保留接入前 Server_ChangeBox_Implementation 的守卫）：
+	//保护期内受击框保持为无碰撞，要等下一次通知重新给尺寸
+	if (Box == 0 && PS->CharacterState == ECharacterStateType::Protected)return;
+
+	if (Box == 0)
+	{
+		NotifiedPlayerBoxSize = Size;
+		NotifiedPlayerBoxOffset = Offset;
+	}
+	else
+	{
+		NotifiedAttackBoxSize = Size;
+		NotifiedAttackBoxOffset = Offset;
+	}
+
+	//本地先行：这一帧就派生应用
+	DeriveAndApplyBoxes();
+}
+
+void AC_Character::DeriveAndApplyBoxes()
+{
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS == nullptr)return;
+
+	//状态闸门（设计 5.9b 的"派生"）。两条判据与接入前逐条同源：
+	//① 命中三态下攻击框无法启动（Mult_ChangeBoxSize 里的那一条）；
+	//② 保护态下受击框保持为无碰撞（Server_ChangeBox_Implementation 的那一条）。
+	//归零写进"通知几何"本身而不是只改组件：接入前那条路径把尺寸真的写成了 0，
+	//状态退出后不会自己回来 —— 这里同样，要等下一次通知重新给尺寸。
+	//（用 PS->CharacterState 而不是 GetInformation() 缓存下来的 MyCState：本函数也会被
+	//「非 Tick 时刻」的写入点调用（技能输入、替身落点），那些时刻 MyCState 是上一帧的）
+	if (PS->CharacterState == ECharacterStateType::Staggered
+		|| PS->CharacterState == ECharacterStateType::Launched
+		|| PS->CharacterState == ECharacterStateType::Grabbed)
+	{
+		NotifiedAttackBoxSize = FVector::ZeroVector;
+		NotifiedAttackBoxOffset = FVector::ZeroVector;
+	}
+	if (PS->CharacterState == ECharacterStateType::Protected)
+	{
+		NotifiedPlayerBoxSize = FVector::ZeroVector;
+		NotifiedPlayerBoxOffset = FVector::ZeroVector;
+	}
+
+	//受击框在前、攻击框在后（接入前每次只改一个框，这里的次序只是定个固定写法）
+	ApplyBoxGeometry(PlayerBox, NotifiedPlayerBoxSize, NotifiedPlayerBoxOffset);
+	ApplyBoxGeometry(AttackBox, NotifiedAttackBoxSize, NotifiedAttackBoxOffset);
+}
+
+void AC_Character::ApplyBoxGeometry(UBoxComponent* TargetBox, const FVector& Size, const FVector& Offset)
+{
+	if (TargetBox == nullptr)return;
+
+	//翻转由朝向派生（设计 5.9b）：每帧按当前 Toward 重算，而不是只在通知那一刻算一次 ——
+	//这是本片"客户端与服务器同一动画帧一致（容差 0）"的落点：两端那份 Toward 的到达时刻
+	//可以不同、但值一致，逐帧重算就不会留下"通知跑在 Toward 到达之前"那一段错翻的窗口
+	FVector TargetOffset = Offset;
+	if (!Toward)TargetOffset.X = -TargetOffset.X;
+
+	//碰撞启用由尺寸派生（与接入前 Mult_ChangeBoxSize 同一判据）
+	const ECollisionEnabled::Type TargetCollision = Size.IsNearlyZero()
+		? ECollisionEnabled::NoCollision : ECollisionEnabled::QueryOnly;
+
+	//只在真的变了才写组件：本函数每帧都跑两次，无脑写会把渲染状态一路标脏
+	const bool bSizeChanged = TargetBox->GetUnscaledBoxExtent() != Size;
+	const bool bOffsetChanged = TargetBox->GetRelativeLocation() != TargetOffset;
+	const bool bCollisionChanged = TargetBox->GetCollisionEnabled() != TargetCollision;
+
+	if (bSizeChanged)TargetBox->SetBoxExtent(Size);
+	if (bOffsetChanged)TargetBox->SetRelativeLocation(TargetOffset);
+	if (bCollisionChanged)TargetBox->SetCollisionEnabled(TargetCollision);
+
+	if (!bSizeChanged && !bOffsetChanged && !bCollisionChanged)return;
+
+	//验收读数（设计 5.9b 的验收标准：客户端在任意动画帧打印 AttackBox 的
+	//GetUnscaledBoxExtent() 与 GetRelativeLocation()，与服务器同一帧一致、容差 0）。
+	//带上动画身份，同一个动画位次在两端直接可比：动画名 + 播放到第几帧 + 驱动派生的三个量
+	const UPaperFlipbook* CurrentFlipbook = Flipbook ? Flipbook->GetFlipbook() : nullptr;
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	UE_LOG(LogPrediction, Verbose, TEXT("BoxChange: %s side %s box %s anim %s frame %d state %d toward %d size %s offset %s collision %d"),
+		*GetName(), HasAuthority() ? TEXT("server") : TEXT("client"),
+		TargetBox == PlayerBox ? TEXT("Player") : TEXT("Attack"),
+		CurrentFlipbook ? *CurrentFlipbook->GetName() : TEXT("none"),
+		Flipbook ? Flipbook->GetPlaybackPositionInFrames() : -1,
+		PS ? (int32)PS->CharacterState : -1, Toward ? 1 : 0,
+		*Size.ToCompactString(), *TargetOffset.ToCompactString(), (int32)TargetCollision);
 }
 
 void AC_Character::Server_SetSummonIndex_Implementation(int32 target)
@@ -598,13 +766,9 @@ void AC_Character::Attack(const FInputActionValue& Value)
 		&& (PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)
 		&& (bAttackInputLock == false || bPreInputLock == false))
 	{
-		//下一次普攻输入创建新键时先冻结旧键（设计 2.4.4 的"主路径"）：同一时刻只允许一个活跃键，
-		//CreatePredictionKey 撞上活跃键会 ensure 并返回 0
-		const uint32 OldKeyID = PredictionComponent->GetActivePredictionKeyID();
-		if (OldKeyID != 0)
-		{
-			PredictionComponent->EndPredictionKey(OldKeyID);
-		}
+		//下一次普攻输入创建新键时先冻结旧键（设计 2.4.4 的"主路径"、2.3.2）：同一时刻只允许一个
+		//活跃键，CreatePredictionKey 撞上活跃键会 ensure 并返回 0
+		FreezeActivePredictionKey();
 		KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Attack);
 	}
 
@@ -671,6 +835,9 @@ void AC_Character::Escape(const FInputActionValue& Value)
 		&& EscapeCDState == 0.f
 		&& (PS->CharacterState == ECharacterStateType::Staggered || PS->CharacterState == ECharacterStateType::Launched))
 	{
+		//换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：被冻结的那个只冻结、不结算，
+		//照旧由它自己的回执或超时结算
+		FreezeActivePredictionKey();
 		KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Escape);
 	}
 
@@ -716,12 +883,16 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 	if (!PS)return;
 	if (!GameState)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//技能输入时先关掉攻击框（碰撞框切片：改走统一入口 —— Prediction.Box 打开 = 就在这一端应用，
+	//关掉 = 逐字等于接入前那条本地控制端的 Server_ChangeBox RPC）
+	RequestChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (FirstSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
 
 		//预测接入点（设计 3.6.1 / 计划 3.0 固定动作 1）：本机控制（函数开头已判）+ 能预测 + 本片开关
+		//【同形提醒】五个技能输入（FirstSkill / SecondSkill / FinalSkill / Scroll / Summon）的这一段逐字相同，
+		//只差请求值、CD 字段与本地先行内容；改一处必须五处一起改（抽公共骨架是可选重构，见计划 5.4）
 		//四条都过才建键（末条端别闸门是 3.3 实机返工补的）。任一条不过 = 降级路径：不建键、
 		//不标记、不做任何本地先行，只发空键 RPC
 		uint32 KeyID = 0;
@@ -732,6 +903,9 @@ void AC_Character::FirstSkill(const FInputActionValue& Value)
 			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
 			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
 		{
+			//换技能 / 换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：同一时刻只允许
+			//一个活跃键，冻结由"下一次预测"驱动；被冻结的那个照旧由它自己的回执或超时结算
+			FreezeActivePredictionKey();
 			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
 
@@ -772,7 +946,9 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 	if (!PS)return;
 	if (!GameState)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//技能输入时先关掉攻击框（碰撞框切片：改走统一入口 —— Prediction.Box 打开 = 就在这一端应用，
+	//关掉 = 逐字等于接入前那条本地控制端的 Server_ChangeBox RPC）
+	RequestChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (SecondSkillCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -786,6 +962,9 @@ void AC_Character::SecondSkill(const FInputActionValue& Value)
 			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
 			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
 		{
+			//换技能 / 换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：同一时刻只允许
+			//一个活跃键，冻结由"下一次预测"驱动；被冻结的那个照旧由它自己的回执或超时结算
+			FreezeActivePredictionKey();
 			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
 
@@ -814,7 +993,9 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//技能输入时先关掉攻击框（碰撞框切片：改走统一入口 —— Prediction.Box 打开 = 就在这一端应用，
+	//关掉 = 逐字等于接入前那条本地控制端的 Server_ChangeBox RPC）
+	RequestChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (PS->Chakra == 4) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
 		if (TryTargetToward.X < 0)Server_ChangeToward(false);
@@ -827,6 +1008,9 @@ void AC_Character::FinalSkill(const FInputActionValue& Value)
 			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
 			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
 		{
+			//换技能 / 换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：同一时刻只允许
+			//一个活跃键，冻结由"下一次预测"驱动；被冻结的那个照旧由它自己的回执或超时结算
+			FreezeActivePredictionKey();
 			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
 
@@ -859,7 +1043,9 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//技能输入时先关掉攻击框（碰撞框切片：改走统一入口 —— Prediction.Box 打开 = 就在这一端应用，
+	//关掉 = 逐字等于接入前那条本地控制端的 Server_ChangeBox RPC）
+	RequestChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (!GameState)return;
 	if (ScrollCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
@@ -875,6 +1061,9 @@ void AC_Character::Scroll(const FInputActionValue& Value)
 			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
 			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
 		{
+			//换技能 / 换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：同一时刻只允许
+			//一个活跃键，冻结由"下一次预测"驱动；被冻结的那个照旧由它自己的回执或超时结算
+			FreezeActivePredictionKey();
 			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
 
@@ -902,7 +1091,9 @@ void AC_Character::Summon(const FInputActionValue& Value)
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
 	if (!PS)return;
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected))return;
-	Server_ChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//技能输入时先关掉攻击框（碰撞框切片：改走统一入口 —— Prediction.Box 打开 = 就在这一端应用，
+	//关掉 = 逐字等于接入前那条本地控制端的 Server_ChangeBox RPC）
+	RequestChangeBox(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
 	if (!GameState)return;
 	if (SummonCDState == 0.f) {
 		if (TryTargetToward.X > 0)Server_ChangeToward(true);
@@ -918,6 +1109,9 @@ void AC_Character::Summon(const FInputActionValue& Value)
 			&& CVarPredictionEnabled.GetValueOnGameThread() != 0
 			&& CVarPredictionSkill.GetValueOnGameThread() != 0)
 		{
+			//换技能 / 换切片时先冻结旧键（设计 2.3.2 / 计划 3.6 的"键不共享"）：同一时刻只允许
+			//一个活跃键，冻结由"下一次预测"驱动；被冻结的那个照旧由它自己的回执或超时结算
+			FreezeActivePredictionKey();
 			KeyID = PredictionComponent->CreatePredictionKey((uint8)EPredictionType::Skill);
 		}
 
@@ -1003,7 +1197,9 @@ void AC_Character::Server_Escape_Implementation(FPredictionKey PredictionKey)
 	ProtectedTime = EscapeProtectedTime;
 
 	//受击框为无碰撞，进入保护状态
-	Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
+	//（碰撞框切片：改走统一入口。Prediction.Box 打开 = 就地应用，随后这一行把状态改成 Protected、
+	//派生闸门接着保持它为零；关掉 = 逐字等于接入前那次直调 Server_ChangeBox_Implementation）
+	ClearBox(0);
 	PS->CharacterState = ECharacterStateType::Protected;
 
 	GetCharacterMovement()->StopMovementImmediately();
@@ -1103,6 +1299,19 @@ void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)
 	Toward = TargetToward;
 }
 
+void AC_Character::FreezeActivePredictionKey()
+{
+	//冻结旧键（设计 2.3.2）：只冻结、不结算 —— 结算仍由它自己的回执或超时执行（设计 2.3.1），
+	//所以换切片 / 换技能不会丢掉上一个键的待结算状态，它带着自己的标记进未结算缓冲池。
+	//组件与键都在时才动：没有活跃键时本函数什么都不做（这就是"没有下一次预测"的常态）
+	if (PredictionComponent == nullptr)return;
+	const uint32 OldKeyID = PredictionComponent->GetActivePredictionKeyID();
+	if (OldKeyID != 0)
+	{
+		PredictionComponent->EndPredictionKey(OldKeyID);
+	}
+}
+
 void AC_Character::SendLockCorrection(uint8 LockMask)
 {
 	//按掩码读出当前值打包（设计 2.8）：掩码外的位留 0，客户端也只写掩码覆盖的锁
@@ -1171,6 +1380,17 @@ void AC_Character::Tick(float DeltaTime)
 	//每帧获取角色信息
 	GetInformation();
 
+	//碰撞框派生（计划 3.5 / 设计 5.9b）：两端每帧按"通知写入的几何 + PS->CharacterState + Toward"
+	//重算两个框的尺寸 / 位置 / 碰撞启用。这里是"任意动画帧两端一致"的来源 —— 两端各自跑同一套
+	//派生，服务器那一份也不再由客户端的通知经多播驱动。
+	//位置必须在 GetInformation() 之后、空指针早退之前：本函数自己判 PS 的空，
+	//不跟在 PS / GameState 早退后面（框的派生与 GameState 无关）。
+	//开关关掉时整段不做：那时几何的唯一下发路径是老路（RPC + 多播），派生会把它拽回来
+	if (CVarPredictionBox.GetValueOnGameThread() != 0)
+	{
+		DeriveAndApplyBoxes();
+	}
+
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
 	AGameStateBase* GameState = GetWorld()->GetGameState<AGameStateBase>();
@@ -1188,7 +1408,7 @@ void AC_Character::Tick(float DeltaTime)
 			PredictionComponent->InitializePredictionContext();
 		}
 
-		//超时兜底（阶段二还没有键，这里是空转；Prediction.Draw 的绘制也挂在这次调用的开头）
+		//超时兜底（3.1 起常态有键；Prediction.Draw 的绘制也挂在这次调用的开头）
 		PredictionComponent->TickPredictionTimeout(DeltaTime);
 	}
 
@@ -1257,7 +1477,8 @@ void AC_Character::Tick(float DeltaTime)
 			if (LaunchState == 2 && GetActorLocation().Z > 3.f)LaunchState = 3;
 			if (LaunchState == 3 && GetActorLocation().Z < 3.f) {
 				//受击框为无碰撞，进入起身保护状态
-				Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 0);
+				//（碰撞框切片：同上，改走统一入口）
+				ClearBox(0);
 				PS->CharacterState = ECharacterStateType::Protected;
 				ProtectedStartTime = GameState->GetServerWorldTimeSeconds();
 				ProtectedTime = StandProtectedTime;

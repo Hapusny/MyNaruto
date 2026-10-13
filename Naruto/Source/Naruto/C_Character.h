@@ -82,7 +82,8 @@ public:
 	TObjectPtr<UPaperZDAnimationComponent> PaperZD;
 
 	//预测组件（设计 3.2 / 3.1：挂在角色上，服务器与客户端各挂一个，随角色生成销毁）。
-	//预测逻辑只在客户端生效，服务器上它只用于读回执带回来的预测键
+	//预测逻辑只在客户端生效；服务器上它不参与任何逻辑（CanPredict 在服务器上同样为真，
+	//服务器不先行靠的是"服务器侧没有任何建键调用"，设计 3.2）
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<UC_PredictionComponent> PredictionComponent;
 
@@ -106,6 +107,22 @@ public:
 	//更改碰撞体
 	UFUNCTION(Server,Reliable,BlueprintCallable)
 	void Server_ChangeBox(FVector Size, FVector Offset, int32 Box);
+
+	//碰撞框变更的【统一入口】（计划 3.5 / 设计 5.9b 的路线 A：两端各自派生）。
+	//全工程每一处框的写入都从这里走：蓝图 I_ChangeBox（AN_ChangeAttackBox / AN_ChangePlayerBox
+	//通知的函数体）与 C++ 的九个调用点。Prediction.Box 打开时 = 就地应用自己那一份几何 ——
+	//通知在哪一端跑，哪一端当场改自己的框，拥有者不再等一个 RTT 的多播（接入前它的几何必须
+	//等"自己发的 RPC 到服务器、服务器再 Mult_ChangeBoxSize 播回来"）；关掉时逐字等于接入前：
+	//只有本地控制端执行，经 Server_ChangeBox 交给服务器、再由 Mult_ChangeBoxSize 播给所有人
+	UFUNCTION(BlueprintCallable)
+	void RequestChangeBox(FVector Size, FVector Offset, int32 Box);
+
+	//把某个框关掉（尺寸归零 = 无碰撞）。四处服务器侧调用点共用：受击打断（PlayerStateReset）、
+	//替身落点、起身保护、技能输入的服务器半边。开关语义与 RequestChangeBox 同一套，差别只在
+	//"接入前的老路"那一支的形状：这些调用点本来就在服务器上，接入前走的是
+	//Server_ChangeBox_Implementation 本身（服务器就地应用 + 多播），不是客户端的 RPC
+	//（纯 C++ 入口：调用方都在服务器侧，蓝图侧没有调用点）
+	void ClearBox(int32 Box);
 
 protected:
 	UFUNCTION(NetMulticast, Reliable)
@@ -479,6 +496,14 @@ private:
 	bool bIsProtectedShow = false;
 
 
+	//---- 预测键的建键入口（设计 2.3.2 / 计划 3.6 的"键不共享"）----
+	//同一时刻只允许一个活跃（未冻结）预测键：CreatePredictionKey 撞上活跃键会 ensure 并返回 0
+	//（设计 3.4.2），所以【冻结旧键的责任在调用方】。冻结由"下一次预测"驱动、不由轮询驱动（设计 2.3.2）——
+	//七个建键点（普攻 / 替身 / 技能一 / 技能二 / 奥义 / 秘卷 / 通灵）在建键前一律先调本函数。
+	//换切片也一样：技能进行中按普攻时，键从技能键换成普攻键；被冻结的那个只冻结、不结算，
+	//照旧进未结算缓冲池，仍由它自己的回执或超时结算（设计 2.3.1）
+	void FreezeActivePredictionKey();
+
 	//---- 锁更正通道（设计 2.8 / 5.5，计划 2.5）----
 	//三个锁的位域。掩码的语义是"本次更正声明了哪几个锁"：绝大多数调用点就是"服务器刚写过的那几位"，
 	//唯一的例外是 Server_Attack 的拒绝路径 —— 它没写 bAttackInputLock，但必须声明 bit0，
@@ -503,4 +528,29 @@ private:
 	//（FRootMotionSource::Matches 比的就是名字，见那里的注释）；本计数只进日志，用来数"一次按键被
 	//施加了几次"，两端各自从 1 开始、不参与引擎配对
 	int32 MoveSourceSerial = 0;
+
+	//---- 碰撞框切片（计划 3.5 / 设计 5.9b）----
+	//"通知写入的几何"：每条通知（AN_ChangeAttackBox / AN_ChangePlayerBox）带着它那一刻的尺寸与偏移，
+	//两端各自把自己收到的那一份存下来，Tick 再按 PS->CharacterState / Toward 派生（尺寸过状态闸门、
+	//偏移按朝向翻转）写进组件。四个量都不是复制量、不进权威值表 —— 设计 5.9b 明说这三个量不参与
+	//预测（框的尺寸 / 偏移 / 翻转不进权威值表、不建键、不写标记），两端一致靠的是"同一条通知
+	//+ 同一套派生算法"，不是靠网络同步
+	FVector NotifiedPlayerBoxSize = FVector::ZeroVector;
+	FVector NotifiedPlayerBoxOffset = FVector::ZeroVector;
+	FVector NotifiedAttackBoxSize = FVector::ZeroVector;
+	FVector NotifiedAttackBoxOffset = FVector::ZeroVector;
+
+	//写入"通知几何"并立即派生应用一次（本地先行：通知这一帧就生效）。
+	//逐条保留接入前 Server_ChangeBox_Implementation + Mult_ChangeBoxSize_Implementation 的语义：
+	//保护状态受击框的写入整体丢弃（该框保持为无碰撞）
+	void ApplyChangeBoxLocal(FVector Size, FVector Offset, int32 Box);
+
+	//按已复制状态派生两个框的最终几何并应用到组件（两端每帧、Tick 里调，本地写入点也顺手调一次）。
+	//闸门与接入前同源：命中三态（Staggered / Launched / Grabbed）→ 攻击框归零；保护态 → 受击框归零。
+	//归零写进的是"通知几何"本身（闩锁）—— 与接入前 PlayerStateReset 那次
+	//Server_ChangeBox(0,0,0,1) 等效：状态退出后不会自己回来，要等下一次通知重新给尺寸
+	void DeriveAndApplyBoxes();
+
+	//把一份几何写进组件（尺寸 / 偏移 / 碰撞启用）。只在真的变了才写 —— 本函数每帧都被调用两次
+	void ApplyBoxGeometry(UBoxComponent* TargetBox, const FVector& Size, const FVector& Offset);
 };

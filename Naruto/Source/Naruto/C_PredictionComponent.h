@@ -29,7 +29,8 @@ extern TAutoConsoleVariable<int32> CVarPredictionDraw;		// Prediction.Draw：屏上
 extern TAutoConsoleVariable<int32> CVarPredictionSkill;		// Prediction.Skill：技能切片（3.1，五条输入 + 通知半边）
 extern TAutoConsoleVariable<int32> CVarPredictionEscape;	// Prediction.Escape：替身切片（3.2，Escape 输入 + 位置基线）
 extern TAutoConsoleVariable<int32> CVarPredictionAttack;	// Prediction.Attack：普攻段切片（3.3，普攻输入点 + 通知半边）
-extern TAutoConsoleVariable<int32> CVarPredictionMove;		// Prediction.Move：位移切片（3.4 重做，只有客户端那一半入口读它）
+extern TAutoConsoleVariable<int32> CVarPredictionMove;		// Prediction.Move：位移切片（3.4 重做；客户端那一半入口 + 服务器侧的校正抑制两处读它）
+extern TAutoConsoleVariable<int32> CVarPredictionBox;		// Prediction.Box：碰撞框切片（3.5，两个框的写入点 + Tick 的派生）
 
 // ---- 服务器侧调试开关（计划"工具与调试开关"表，阶段二 2.6 建）----
 // 这两个只在【非 Shipping 构建】里编译（工具表的约定：开关的"关"必须是安全态，等价于"未接入"）。
@@ -74,6 +75,9 @@ struct FPredictionKey
 	bool IsValidKey() const { return KeyID > 0; }
 	bool WasReceived() const { return PredictiveConnectionKey != 0; }
 	bool WasLocallyGenerated() const { return KeyID > 0 && PredictiveConnectionKey == 0; }
+	// 上面两条查询是设计 3.3.1 冻结接口的一部分（保留）；当前全模块没有调用点——
+	// "本机生成"由 KeyID 非 0 一件事就能认出，NetSerialize 也是直接读 PredictiveConnectionKey；
+	// 将来要给"收到 / 自建"分流时（日志、校验）再用它们
 
 	bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess);
 };
@@ -166,6 +170,7 @@ struct FPredictionRecord
 	float EndTime = 0.f;
 	bool bResolved = false;		// 是否已结算
 	bool bConfirmed = false;	// 结算结果：true = 确认，false = 回滚
+							// 本字段与 EndTime 同为调试字段（设计 3.3.1 定义、当前无读点，见计划 5.4）
 	bool bFrozen = false;		// 是否已冻结（EndPredictionKey 后置位）
 };
 

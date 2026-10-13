@@ -65,7 +65,8 @@ void AC_PlayerController::Tick(float DeltaSeconds)
 }
 
 //服务器校验（设计 5.1 / 计划 2.3）：客户端在输入函数里做的可行性判断，搬到服务器照做一遍；
-//客户端那一份保留，作为本地先行判定。此刻还没有预测键，拒绝就表现为"世界状态不变"
+//客户端那一份保留，作为本地先行判定。本函数不带预测键（设计 3.4.2 的挂载约束），
+//拒绝不触发回滚：本地那份先行值由权威值表纠正（设计 2.7.2）
 void AC_PlayerController::Server_ChangeChakra_Implementation(int TargetChakra)
 {
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
@@ -144,14 +145,18 @@ void AC_PlayerController::PlayerStateReset()
 	//本地锁的复位只有这一条来源（设计 2.6.1）。本函数只在服务器上调用（伤害是权威的），
 	//也就是"服务器每一处写锁的位置"里的 PlayerStateReset 那一行
 	GetPawn<AC_Character>()->SendLockCorrection(AC_Character::LockBitAttackInputLock);
-	GetPawn<AC_Character>()->Server_ChangeBox_Implementation(FVector(0.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f), 1);
+	//碰撞框切片（计划 3.5 / 设计 5.9b）：改走统一入口。Prediction.Box 打开 = 就地应用
+	//（把"通知几何"里的攻击框尺寸写成零、随即生效；调用方紧接着才会把状态改成
+	//受击 / 抓取 / 击飞，派生闸门随后继续把它保持为零）。关掉 = 逐字等于接入前那次直调
+	//Server_ChangeBox_Implementation
+	GetPawn<AC_Character>()->ClearBox(1);
 	if (GetPawn<AC_Character>()->MyGrabPoint)GetPawn<AC_Character>()->MyGrabPoint->bIsUsing = false;
 }
 
 //服务器校验（设计 5.1 / 计划 2.3）：本函数在工程里【没有任何调用者】——C++ 侧没有调用点，
 //也没有 BlueprintCallable（蓝图侧调用点盘点里 BP_PlayerController 标为"无关"），
-//因此没有客户端判据可搬。段号将来由 3.3 的预测键路径决定（设计 2.4.4），
-//它的校验与去向届时一并处理，本轮保持原样
+//因此没有客户端判据可搬。段号由 3.3 起的预测键路径决定（设计 2.4.4，已落地），
+//本函数至今仍是零调用点 —— 删或改留待裁决（见计划 5.4）
 void AC_PlayerController::Server_ChangeAttackState_Implementation(int TargetAttack)
 {
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
@@ -162,7 +167,7 @@ void AC_PlayerController::Server_ChangeAttackState_Implementation(int TargetAtta
 
 //服务器校验（设计 5.1 / 计划 2.3）：本函数同样【没有任何调用者】，且 CharacterState 整条
 //按已定事项 22 是服务器写、不由客户端输入触发（客户端那份校验只读不写），
-//客户端本就无从发起这个请求：没有判据可搬，保留原样，等 3.x 决定删或改
+//客户端本就无从发起这个请求：没有判据可搬。3.x 收口后仍是零调用点 —— 删或改留待裁决（见计划 5.4）
 void AC_PlayerController::Server_ChangeCharacterState_Implementation(ECharacterStateType TargetCharacterState)
 {
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
@@ -190,6 +195,17 @@ void AC_PlayerController::Server_ChangeSkillState_Implementation(int TargetSkill
 
 	//五个输入函数共有的判据：状态是常态或保护态
 	if (!(PS->CharacterState == ECharacterStateType::Normal || PS->CharacterState == ECharacterStateType::Protected)) { SendPredictionResolve(PredictionKey, RejectResult); return; }
+
+	//碰撞框切片（计划 3.5 / 设计 5.9b）：技能输入点那一处"先关掉攻击框"，接入前由客户端发
+	//Server_ChangeBox RPC 带过来（C_Character 五个输入函数里那一行）。Prediction.Box 打开后
+	//客户端那一半改成就地应用、不再发 RPC，所以服务器这一半在这里补一条同源写。
+	//位置与客户端半边逐条对齐：状态判据之后（客户端那次调用也在状态判据之后 —— 状态不对时整体不发生）、
+	//ForceReject 与 CD 判据之前（客户端那几处也都在关框之后，CD 没到照样关框）。
+	//开关关掉时不补：那时客户端照旧发 RPC，服务器再写一次是重复
+	if (CVarPredictionBox.GetValueOnGameThread() != 0)
+	{
+		Char->ClearBox(1);
+	}
 
 	//调试开关（计划 2.6 工具表）：带键请求一律拒绝、且不写权威值 —— 回滚路径 100% 可复现。
 	//只作用于【带键】请求：不带键的请求没有本地预测可回滚，拒掉它只会让开关打开时玩不了
