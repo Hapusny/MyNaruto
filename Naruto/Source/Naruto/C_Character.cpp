@@ -1299,6 +1299,36 @@ void AC_Character::Server_ChangeToward_Implementation(bool TargetToward)
 	Toward = TargetToward;
 }
 
+void AC_Character::SyncRemoteTowardFromFlipbook()
+{
+	//远端模拟代理的朝向补值：客户端上，非本机控制的角色那份 Toward 没有任何下发通道 ——
+	//设计 5.2b 把 Toward 从逐属性复制挪进了权威值表，而表里 Character 段只有 Self.Char.*
+	//（Enemy.Char.* 不存在、敌方角色那份权威值表组件也没有被绑定）=> 那份 Toward 恒为类默认 true，
+	//而框的翻转（ApplyBoxGeometry / 降级路 Mult_ChangeBoxSize）与蓝图侧客户端本地生成的特效都读它，
+	//表现就是"服务器玩家的框和特效永远正朝向"。
+	//那份权威朝向其实一直跟着 Flipbook 的翻转在复制（Server_ChangeToward 设相对旋转、
+	//Flipbook 在构造函数里 SetIsReplicated(true)），这里由它反推补齐 —— 纯本地派生，不是预测。
+	//本机控制的角色不走这里：它的 Toward 由权威值表那条 Self.Char.Toward 写（见设计 5.2b）
+	if (HasAuthority() || IsLocallyControlled() || Flipbook == nullptr)return;
+
+	const FRotator FlipRotation = Flipbook->GetRelativeRotation();
+	//判据不能用 Pitch。翻转写的是 (180,0,-90) 那个 Pitch，但它经四元数绕了一圈回来：
+	//SetRelativeRotation 走 SetRelativeLocationAndRotation -> MoveComponentImpl ->
+	//RelativeRotationCache.QuatToRotator_ReadOnly，回读到的 RelativeRotation 已经规范化成
+	//|Pitch| <= 90 的等价形式（FQuat::Rotator 的 Pitch 就是 asin，值域只有 [-90,90]），
+	//那个 180 再也看不回来 —— 写成 |Pitch| < 90 的话判据对任何旋转都为真、恒等于"朝向 = true"。
+	//改用【组件局部 X 轴】：未翻转的 (0,0,-90) 把 X 轴放在 (1,0,0)，含 180 度俯仰的翻转把它
+	//放到恰好相反的一侧。轴是"这个旋转本身"的不变量，与回读成哪个等价形式无关，判据才稳
+	const FVector FlipAxisX = FlipRotation.Vector();
+	const bool bDerivedToward = FlipAxisX.X > 0.f;
+	if (bDerivedToward == Toward)return;
+
+	Toward = bDerivedToward;
+	UE_LOG(LogPrediction, Verbose, TEXT("TowardSync: %s side client toward %d (flip rot %.1f/%.1f/%.1f axis %.2f/%.2f/%.2f)"),
+		*GetName(), Toward ? 1 : 0, FlipRotation.Pitch, FlipRotation.Yaw, FlipRotation.Roll,
+		FlipAxisX.X, FlipAxisX.Y, FlipAxisX.Z);
+}
+
 void AC_Character::FreezeActivePredictionKey()
 {
 	//冻结旧键（设计 2.3.2）：只冻结、不结算 —— 结算仍由它自己的回执或超时执行（设计 2.3.1），
@@ -1386,10 +1416,15 @@ void AC_Character::Tick(float DeltaTime)
 	//位置必须在 GetInformation() 之后、空指针早退之前：本函数自己判 PS 的空，
 	//不跟在 PS / GameState 早退后面（框的派生与 GameState 无关）。
 	//开关关掉时整段不做：那时几何的唯一下发路径是老路（RPC + 多播），派生会把它拽回来
+	//在此之前先把远端模拟代理那份 Toward 补齐（本地派生）：框的翻转与客户端本地生成的特效都读它
+	SyncRemoteTowardFromFlipbook();
 	if (CVarPredictionBox.GetValueOnGameThread() != 0)
 	{
 		DeriveAndApplyBoxes();
 	}
+
+	//保护（无敌）表现：同样按状态每帧派生，不再依赖服务器那一次多播（理由见函数实现处的注释）
+	DeriveAndApplyProtectedVisual();
 
 	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
 	if (!PS)return;
@@ -1454,17 +1489,14 @@ void AC_Character::Tick(float DeltaTime)
 		}
 
 		if (PS->CharacterState == ECharacterStateType::Protected) {
-			if (bInProtectAnim == false) {
-				Mult_ChangeProtectedAnim(true);
-				bInProtectAnim = true;
-			}
+			//表现不再在这里发（原为进保护发一次 true、计时器到期发一次 false）：
+			//那一对多播的"退出"只有一个出口，而保护期间允许出招 —— 收招会把状态直接写成 Normal
+			//（ChangeAttack(0)），多播发不出去，闩锁留在 true 就是"一直半透明"。
+			//改由两端各自在 Tick 里按 PS->CharacterState 派生（DeriveAndApplyProtectedVisual），
+			//本分支只剩计时器的状态出口这一个职责
 
 			//结束保护
 			if ((GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ProtectedStartTime) > ProtectedTime) {
-				if (bInProtectAnim == true) {
-					Mult_ChangeProtectedAnim(false);
-					bInProtectAnim = false;
-				}
 				PS->CharacterState = ECharacterStateType::Normal;
 			}
 		}
@@ -1541,9 +1573,35 @@ void AC_Character::Tick(float DeltaTime)
 
 void AC_Character::Mult_ChangeProtectedAnim_Implementation(bool show)
 {
+	//本多播已不是保护表现的驱动源（改由 DeriveAndApplyProtectedVisual 按 PS->CharacterState 每帧派生）。
+	//保留它只为一件事：外部若仍有调用（如蓝图侧），表现照旧生效，不留空实现
 	if (!Flipbook)return;
 	if(show)Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.6f));
 	else Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
+
+	//同步"上一次写出去的半透明值"这道门：否则派生那边以为自己写的还是旧值，会少写一次
+	bIsProtectedShow = show;
+}
+
+void AC_Character::DeriveAndApplyProtectedVisual()
+{
+	//保护（无敌）半透明按 PS->CharacterState 每帧派生，两端各跑一遍（状态两端一致：
+	//服务器是权威、客户端那份经权威值表的 Enemy.PS.* / Self.PS.* 到达）。
+	//为什么不用"进保护发 true、计时器到期发 false"那一对多播：退出只有一个出口，
+	//而保护期间允许出招（Attack 里的 Protected 分支）—— 收招通知会把状态直接写成 Normal
+	//（ChangeAttack(0)），多播发不出去，半透明就再也回不来。派生的状态下没有会漏的状态位
+	AC_PlayerState* PS = GetPlayerState<AC_PlayerState>();
+	if (PS == nullptr || Flipbook == nullptr)return;
+
+	const bool bShow = (PS->CharacterState == ECharacterStateType::Protected);
+	if (bShow == bIsProtectedShow)return;
+
+	bIsProtectedShow = bShow;
+	if (bShow)Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.6f));
+	else Flipbook->SetSpriteColor(FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
+
+	UE_LOG(LogPrediction, Verbose, TEXT("ProtectedVisual: %s side %s show %d state %d"),
+		*GetName(), HasAuthority() ? TEXT("server") : TEXT("client"), bShow ? 1 : 0, (int32)PS->CharacterState);
 }
 
 void AC_Character::Mult_ChangeGravity_Implementation(bool able)
