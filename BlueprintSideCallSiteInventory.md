@@ -37,7 +37,7 @@
   - `I_ChangeDamageValue`：权威时用传入的造成伤害相关参数为 `Type`、`Effect`、`Value`、`Time`、`State` 赋值
   - `I_MakeMove`：权威时用传入的 `Offset` 和本地的 `TargetToward` 调用 `MakeMove`；**非权威分支调用 `PredictMakeMove`**（入参 `Offset` 与本地 `TargetToward` 透传。2026-10-12 按计划 3.4 W4.1 补的客户端那一半，开发者执行 —— 与 `I_ChangeState` / `I_ChangeAttack` 同形。**不调 `MakeMove`**：那一条是权威写者，且非权威端调它会打一条 Warning。**日志佐证（2026-10-12）**：甲落地那一轮 33 条 `MoveRootMotion` 里 17 条来自客户端、非权威端 Warning 0 条 ⇒ 这一处是"换掉"不是"加调"，本项验收完成）
   - `I_StartPreInput`：权威时调用 `StartPreInput`（原为直接 `Set bPreInputLock = false` 与 `TryTargetToward = 0` 两条写；已于 2026-10-09 按计划 2.2 / 已定事项 24 换成调用 C++ 的 `StartPreInput()`，两条写的语义一起挪进了该函数，蓝图侧不再保留，开发者执行）；**非权威分支直接把 `bPreInputLock` 置 `false`**（2026-10-10 按计划 2.7 补的客户端那一半。**不调 `StartPreInput`**——那个函数会连 `TryTargetToward` 一起清零，而它在客户端是本地输入意图，见 `C_Character.cpp` 的 `Move()`）
-  - `I_SpawnSE`：权威时根据传入的 `Offset` 和 `SEName` 和本地 `Toward` 调用 `SpawnBPSE`
+  - `I_SpawnSE`：权威时根据传入的 `Offset` 和 `SEName` 和本地 `Toward` 调用 `SpawnBPSE`。**实机证据（2026-10-14，待编辑器确认）**：收口后的一处缺陷是"服务器玩家在客户端上的特效不论朝向都是正朝向"，它随 C++ 侧"客户端上远端代理的本地 `Toward` 改由 Flipbook 翻转派生"（计划"收口后修复"W6.1 / 设计 5.9b 的实现回填）一并修好 ⇒ 客户端上**确实有一条会自动生成的特效路径在读本地 `Toward`**，而本行只记了权威分支。那条路径是本节点的非权威分支还是另一个调用点，**待编辑器确认**；C++ 侧的量已就位（客户端上远端代理的 `Toward` 不再是类默认值）
 
 - **BPI_Character**  
   供动画通知调用的各种接口，基本在 `BP_Character` 中实现，`BP_Menma` 实现了一个 `I_HitJump`

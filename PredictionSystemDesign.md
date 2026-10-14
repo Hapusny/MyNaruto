@@ -137,6 +137,8 @@
 | 1.1.7-07 | 摄像机系统 | 平滑插值 VInterpTo | 本地表现 | 否 |
 | 1.1.7-08 | 摄像机系统 | 视角切换 SetViewTarget | 客户端执行 | 否 |
 
+> **实现回填（2026-10-14）**：1.1.3-11 / 1.1.3-12 的**保护表现**（半透明）实装时不走"多播更正"——`Mult_ChangeProtectedAnim` 保留，但**不再是驱动源**；半透明改由两端每帧按 `PS->CharacterState == Protected` 派生（计划"收口后修复"W6.2，理由见 5.9a 的实现回填）。1.1.3-11 的"保护状态"本身（`CharacterState`）不受影响，仍按属性预测。
+
 ### 1.2 网络机制层
 
 | 编号 | 机制 | 说明 | 对预测系统的意义 |
@@ -436,6 +438,8 @@ void AC_Character::Attack(const FInputActionValue& Value)
 - 本地生成物：本地预测生成的攻击体、特效。
 
 这些数据的权威值不来自属性复制，需要**完整变化记录 + 回滚/跟进委托**：确认 → 执行跟进委托；拒绝 → 执行回滚委托，恢复旧值。
+
+> **实现回填（2026-10-14）**：上面"本地状态变量"里的 `bInProtectAnim` **已删除**——保护半透明的驱动源从"多播 + 闩锁"改成"按 `PS->CharacterState` 每帧派生"之后，这个闩锁没有存在必要了（理由与实机缺陷见 5.9a 的实现回填、计划"收口后修复"W6.2）。本节的定性不变：非复制数据仍要**完整变化记录 + 回滚/跟进委托**，只是保护表现改由已复制状态派生、不再需要这样一个两端的本地变量。其余各项与实现一致。
 
 #### 2.5.4 关键设计点
 
@@ -1642,6 +1646,10 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 >
 > 再说一遍这里的因果：摘除属于 **HOLD 规则**的要求（本地值要有唯一写者），**不是回滚机制的要求**——回滚由回执/超时驱动，与逐属性复制无关（见 2.7.1 末）。换句话说，"保留复制也能回滚，但本地值会被引擎提前改掉"是准确的，"保留复制回滚就跑不起来"是不准确的。
 
+> **实现回填（2026-10-14）**：本表把 `AC_Character::Toward` 摘进权威值表，**在客户端上给非本方角色留下了一个没有写入者的量** —— 表里 Character 段只有 `Self.Char.*`（见 3.3.1 与 2.7.5：给敌方的只有 `Enemy.PS.*`），敌方角色的权威值表组件在客户端上也没有被绑定（3.4.1 的初始化对敌方留空、不算失败，已定事项 20）。于是客户端上"自己那份"由 `Self.Char.Toward` 写、"对手那份"**恒为类默认值 `true`**；而框的翻转与蓝图侧客户端本地生成的特效都读它 —— 收口后的实机缺陷"服务器玩家在客户端的碰撞框 / 特效永远正朝向"（计划"收口后修复"W6.1）就出在这里。
+>
+> **最终方案**：客户端上远端模拟代理那份 `Toward` 改由**已复制面本地派生**（`AC_Character::SyncRemoteTowardFromFlipbook`，Tick 里跑；本机控制与服务器早退）。本表的摘除决定**不动**：权威朝向本来就一直跟着 `Flipbook` 的相对旋转在复制（`Server_ChangeToward` 写它、组件在构造函数里 `SetIsReplicated(true)`，`RelativeRotation` 是 `COND_None` 的复制属性，见 1.1.8-03），派生只是把既有的复制面读回来——纯本地派生，不建键、不写标记、不新增通道、不动 3.7 冻结表。判据**不能用 Pitch**（四元数回读会把它规范化掉，见 5.9b 末尾的实现回填）。
+
 **(c) 不要做的事**（早期版本的本节要求已废弃）：
 
 - **不需要**给这些属性补 `ReplicatedUsing`；
@@ -1713,6 +1721,13 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 >
 > 注意 `Mult_ChangeProtectedAnim` / `Mult_ChangeGravity` 这类多播**兼具表现与状态**：表现部分（动画示意）按权威门控，状态部分（`bInProtectAnim`、`LaunchState`）必须保持两端一致，不能简单当作"纯表现"处理。
 
+> **实现回填（2026-10-14）**：上面这条注意里的状态部分 `bInProtectAnim` **已随驱动源更换而删除**，保护表现不再走"多播更正"（计划"收口后修复"W6.2）。
+>
+> - **设计如此**：按本节的判据"表现按权威门控、状态部分两端一致"，保护半透明最初实现为"进保护发 `Mult_ChangeProtectedAnim(true)`、退出由服务器 Tick 的计时器到期发 `false`"，两端各自用 `bInProtectAnim` 闩住当前表现。
+> - **最终方案**：改为**按状态每帧派生** —— 两端各自在 Tick 里读 `PS->CharacterState`，为 `Protected` 时半透明、否则不透明（`AC_Character::DeriveAndApplyProtectedVisual`，只在值真的翻转时写 `Flipbook`）。多播**保留**（5.10 不给多播加键、也不删接口），但降为**非驱动源**：它与派生共用同一个"上一次写出去的值"（`bIsProtectedShow`），谁先写谁生效、不打架。`bInProtectAnim` 闩锁一并删除。
+> - **改进缘由**：那对多播的"退出"只有一条出口（服务器 Tick 的计时器到期），而**保护期间允许出招**——收招通知 `ChangeAttack(0)` 会把 `CharacterState` 直接写成 `Normal`，退出多播从此发不出去，闩锁留在 `true`，半透明再也回不来（实机症状："该结束时不恢复，一直半透明"）。派生没有会漏的状态位：半透明的唯一真值就是 `PS->CharacterState == Protected`，而这个状态两端本来就一致（服务器权威写、客户端经权威值表采用，已定事项 22）。手段与 5.9b 的"框由状态派生"是同一条。
+> - 本节的**通知分类不变**（保护表现的驱动源不是通知，是状态）；`Mult_ChangeProtectedAnim` 仍是 5.10 那 4 条不加键的多播之一。
+
 > **`AN_ChangeState` 与技能键的关系（定案）**：它是唯一给 `CharacterState` 写霸体值的路径（`Armor` / `Unbreakable`；C++ 里无人写这两个值，取值由动画序列上的该通知给出。`Adamantine` 在工程里**没有任何写入路径**——该通知只挂在 `FirstSkill` / `SecondSkill`（`Armor`）与 `FinalSkill` / `Summon`（`Unbreakable`）四个序列上，见计划 2.0.3），**写入不进技能键**——不写预测标记、不随技能键回滚。后果是本地霸体在"通知已跑、表里还是旧值"的窗口里会被采用规则第二行（无标记 → 写回本地）覆盖一次，直到服务器自己的同名通知运行、表带上霸体值才恢复；LAN 下窗口约一帧（不可见），`Net PktLag=100` 压测时可见。若将来要消除这个窗口，最小改动是让该通知在拥有者客户端的写入挂当前活跃键（`MarkReplicatedAttribute("Self.PS.CharacterState", GetActivePredictionKey())` 一行），代价是它不再是"只切表现"。
 
 > **实现回填（2026-10-13）**：上面这条定案里的"**不写预测标记**"半句**被订正为写标记**（计划"已定事项"44；协同笔记 §3.16 那一轮漏订正的连带项）。
@@ -1733,6 +1748,12 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 > - **最终方案**：① 通知在**哪一端跑，哪一端当场改自己那一份几何**（蓝图 `I_ChangeBox` 去掉"本地控制时"的门、无条件调 `RequestChangeBox`）；翻转与状态闸门**每帧按 `PS->CharacterState` / `Toward` 派生**（`DeriveAndApplyBoxes`）；**不新增任何复制属性**。② `Server_ChangeBox` / `Mult_ChangeBoxSize` **不删**，留作**降级路径**——工具表"每个开关的关必须是安全态"要求它必须在，`Prediction.Box 0` 走的就是这一对。③ 派生需要一个"**通知写入的几何**"来源（尺寸 / 偏移是动画通知创作的、推不出来）：四个量放 `AC_Character` 私有成员、不上网；**攻击框初值固定为零**（蓝图那份尺寸若取进来，开局就会把攻击框打开），归零写进"通知几何"本身（闩锁，与接入前"写死 0、不自己回来"一致）；④ 老路（`Mult_ChangeBoxSize`）顺手同步"通知几何"，避免"蓝图还没换"的那段时间里派生每帧把框拽回零。
 > - **改进缘由**：派生同时消掉了往返延迟与乱序问题，且不改任何复制面；保留 RPC 对是"开关能退回原路"的硬要求。本节"注意"里说的"不能直接给 `BoxExtent` 加 `Replicated`"仍然成立——正因为如此才选派生而不是另立一组复制属性。
 > - 本节的**验收标准照旧**：客户端任意动画帧打印 `AttackBox` 的 `GetUnscaledBoxExtent()` 与 `GetRelativeLocation()`，与服务器同一帧的值一致（容差 0）；实现上以验收判据为准（蓝图侧那两处改动的现状见 `BlueprintSideCallSiteInventory.md`）。
+
+> **实现回填（2026-10-14，收口后修复 W6.1）**：上面"按 `PS->CharacterState` 与 **`Toward`** 计算"这句话默认了 `Toward` 在两端都有效。**5.2 把它摘进权威值表之后，客户端上非本方角色那份没有写入者**（表里 Character 段只有 `Self.Char.*`、敌方那份权威值表组件在客户端没有被绑定），恒为类默认 `true` —— 框的翻转（`ApplyBoxGeometry` / 降级路 `Mult_ChangeBoxSize`）与蓝图侧客户端本地生成的特效都读它，实机症状是"服务器玩家在客户端上的碰撞框与特效，不论其实际朝向都是正朝向"（动画翻转本身正常，因为那是 `Flipbook` 自己的复制在管）。
+>
+> - **最终方案**：客户端上远端模拟代理的 `Toward` 由 `AC_Character::SyncRemoteTowardFromFlipbook()` 从 **`Flipbook` 已复制的那份相对旋转**反推（Tick 里跑；服务器与本机控制早退 —— 它们那份 `Toward` 有权威写者）。**纯本地派生，不是预测**：不建键、不写标记、不新增通道，也不动本节的路线选择与 3.7 冻结表。权威朝向本来就一直跟着 `Flipbook->RelativeRotation` 在复制（`Server_ChangeToward` 写它、组件在构造函数里 `SetIsReplicated(true)`），派生只是把既有的复制面读回来。
+> - **判据的坑（引擎事实，已对源码核验）**：翻转写的是 `FRotator(180, 0, -90)` —— 那个 180 在 **Pitch** 上，但它经 `SetRelativeRotation` → `SetRelativeLocationAndRotation` → `MoveComponentImpl` → `RelativeRotationCache.QuatToRotator_ReadOnly` 一圈回来已被**规范化**（`FQuat::Rotator` 的 Pitch 就是 `asin`，值域只有 `[-90, 90]`），原值读不回来；因此 `|Pitch| < 90` 这类判据对**任何**旋转都为真（第一版实现即栽在这里：判据恒真 ⇒ 派生值恒等于当前值 ⇒ 一行日志都打不出来，缺陷照旧）。改用**组件局部 X 轴**（`R.Vector()`：未翻转 `(1,0,0)`、翻转 `(-1,0,0)`），轴是"这个旋转本身"的不变量，与回读成哪个等价形式无关。**后接手的判据一律照此：读这份旋转的翻转状态不要用角度分量。**
+> - **验收**：`Prediction.Log 1` 下，客户端上对手每次转向应各有一行 `TowardSync:`（哨兵见 6.2）；翻转后框与特效方向随动画一致。
 
 ### 5.10 键的跨机传递约束
 
@@ -1793,6 +1814,8 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 | `BoxChange:` 日志 | 框写入路径 | **不应出现 `side server` 行** = 蓝图那处"本地控制时"的门已去掉 |
 | `Client_CorrectLocks` 的 `mask` | 锁更正通道 | 恒为 `bAttackInputLock`（bit0），理由见 2.6.1 的实现回填 |
 | `bContextPendingLogged` | 组件 | "上下文还没就绪"每个组件只记一次（`Prediction.Log 1` 下不刷屏），成功时重新武装 |
+| `TowardSync:` 日志（2026-10-14 补） | 远端模拟代理的朝向派生（`SyncRemoteTowardFromFlipbook`） | 只在"派生值 ≠ 当前值"时打一行（带 Flipbook 旋转与局部 X 轴读数）；`Prediction.Log 1` 下客户端上对手每次转向应各一行，无此行 = 派生没生效 |
+| `ProtectedVisual:` 日志（2026-10-14 补） | 保护表现的派生（`DeriveAndApplyProtectedVisual`） | 只在半透明值真的翻转时打一行；`Prediction.Log 1` 下进 / 出保护各一行、两端各一份 |
 
 ### 6.3 降级验收按**可观察行为**判定，不按逐位
 
@@ -1814,6 +1837,8 @@ UI 读取 Chakra 后立即更新为 2 格，CD 显示开始倒计时
 | `AC_Character::PredictMakeMove` | 客户端半边 | `AN_MakeMove` 的客户端那一半（施加根运动源，见 2.9 的实现回填） |
 | `AC_Character::StartPreInput` | 两端（服务器权威分支调用） | `AN_PreInput` 的写入从蓝图搬进 C++（`bPreInputLock = false`、`TryTargetToward = 0`） |
 | `AC_Character::ResetSuccessHit` | 服务器 | `bSuccessHit` 复位点的下发形态（自带 `HasAuthority()` 守卫，幂等） |
+| `AC_Character::SyncRemoteTowardFromFlipbook`（2026-10-14 补） | 客户端（仅远端模拟代理） | 从 `Flipbook` 已复制的翻转反推 `Toward`，补上 5.2b 之后敌方代理那份没有写入者的量（收口后修复 W6.1，见 5.9b 的实现回填） |
+| `AC_Character::DeriveAndApplyProtectedVisual`（2026-10-14 补） | 两端 | 按 `PS->CharacterState` 每帧派生保护半透明，取代多播 + 闩锁（收口后修复 W6.2，见 5.9a 的实现回填） |
 | `AC_Character::SendLockCorrection` / `Client_CorrectLocks` | 服务器 → 拥有者 | 锁更正通道的两个出口与入口（掩码只声明实际下发的位，见 2.6.1） |
 | `AC_PlayerController::SendPredictionResolve` | 服务器 | 回执的**唯一出口**：`ConfirmedStatePacked` 的打包（2.11.1 的公式）、`KeyID == 0` 与 `DropResolve` 两道闸门都收在这里 |
 | `AC_Character::FreezeActivePredictionKey` | 客户端 | 七个建键点在 `CreatePredictionKey` 前统一调它；组件侧"已有活跃键"的 `ensureMsgf` 保持不变，作为"调用方漏了冻结"的安全网（2.3.2 / 3.4.2） |
